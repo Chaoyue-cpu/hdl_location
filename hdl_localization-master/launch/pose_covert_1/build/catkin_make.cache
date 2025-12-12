@@ -1,0 +1,2 @@
+
+-DCATKIN_DEVEL_PREFIX=/home/scy/catkin_ws_hdl_location/src/hdl_localization-master/launch/pose_covert_1/devel -DCMAKE_INSTALL_PREFIX=/home/scy/catkin_ws_hdl_location/src/hdl_localization-master/launch/pose_covert_1/install -G Unix Makefiles
