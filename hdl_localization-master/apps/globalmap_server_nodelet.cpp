@@ -18,6 +18,9 @@
 #include <thread>           // 用于std::thread
 #include <fstream>          // 用于文件读取
 #include <sstream>          // 用于字符串流
+#include <vector>
+#include <string>
+#include <hdl_localization/TileRequest.h>
 
 namespace hdl_localization {
 
@@ -146,7 +149,7 @@ private:
 
     globalmap = merged;
     globalmap_pub.publish(globalmap);
-    NODELET_INFO_STREAM("globalmap loaded");
+    NODELET_INFO_STREAM("globalmap loaded in globalmap_noderet");
   }
 
   /**

@@ -105,7 +105,7 @@ void PoseEstimator::predict(const ros::Time& stamp) {
     init_stamp = stamp;
   }
 
-  // 如果当前时刻距离初始化时刻太短（在冷却时间内）或者时间戳无效或重复，则不进行预测
+  // 如果当前时刻距离初始化时刻太短（在冷却时间内）或者时间戳无效或重复，则不进行预测,cool_time_duration为系统初始启动时不稳定的冷却
   if ((stamp - init_stamp).toSec() < cool_time_duration || prev_stamp.is_zero() || prev_stamp == stamp) {
     prev_stamp = stamp;
     return;
@@ -155,12 +155,12 @@ void PoseEstimator::predict(const ros::Time& stamp, const Eigen::Vector3f& acc, 
 
   // 构造控制向量 u = [acc_x, acc_y, acc_z, gyro_x, gyro_y, gyro_z]
   // 如果加速度过大可以滤波
-  std::cout << "acc_original_predict: " << acc.transpose() << std::endl;
+  // std::cout << "acc_original_predict: " << acc.transpose() << std::endl;
 
   Eigen::VectorXf control(6);
   control.head<3>() = acc;
   control.tail<3>() = gyro;
-  std::cout << "control: " << control.transpose() << std::endl;
+  // std::cout << "control: " << control.transpose() << std::endl;
 
   // 使用带控制输入的预测
   ukf->predict(control);

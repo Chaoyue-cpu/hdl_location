@@ -65,7 +65,24 @@ public:
   using PointT = pcl::PointXYZI;
 
   HdlLocalizationNodelet() : tf_buffer(), tf_listener(tf_buffer) {}
-  virtual ~HdlLocalizationNodelet() {}
+  virtual ~HdlLocalizationNodelet() {
+    // 停止地图线程
+    if (map_thread_.joinable()) {
+      // 先停止callback queue
+      map_queue_.clear();
+      map_queue_.disable();
+
+      // 等待线程结束
+      map_thread_.join();
+    }
+
+    // 清理其他资源
+    if (registration) {
+      registration.reset();
+    }
+
+    NODELET_INFO("Nodelet cleanup completed");
+  }
 
   void onInit() override {
     nh = getNodeHandle();
@@ -114,6 +131,8 @@ public:
     private_nh.param("t_imu_to_base/y", ty, 0.0);
     private_nh.param("t_imu_to_base/z", tz, 0.0);
     t_imu_to_base = Eigen::Vector3f(tx, ty, tz);
+    // 时间偏移补偿
+    private_nh.param("time_offset_lidar_to_imu", time_offset_lidar_to_imu, 0.0);
 
     if (use_imu) {
       NODELET_INFO("enable imu-based prediction");
@@ -140,24 +159,35 @@ public:
     }
 
     // ----------------- 启动地图更新线程 -----------------
-    map_thread_ = std::thread([this]() {
-      ros::NodeHandle nh_map(getPrivateNodeHandle());
-      nh_map.setCallbackQueue(&map_queue_);
-
-      globalmap_sub_ = nh_map.subscribe("/globalmap", 1, &HdlLocalizationNodelet::globalmapCallback, this);
-
-      ros::Rate rate(200);  // 用高频非阻塞轮询，不退出
-      while (ros::ok()) {
-        map_queue_.callAvailable();
-        rate.sleep();
-      }
-    });
+    // map_thread_ = std::thread([this]() {
+    //   // NODELET_WARN("Map thread started! Thread ID: %ld", std::this_thread::get_id());
+    //   // ros::NodeHandle nh_map(getPrivateNodeHandle());
+    //   ros::NodeHandle nh_map;  // 默认构造函数，全局命名空间
+    //   NODELET_WARN("NodeHandle namespace before setCallbackQueue: %s", nh_map.getNamespace().c_str());
+    //   nh_map.setCallbackQueue(&map_queue_);
+    //   NODELET_WARN("NodeHandle namespace after setCallbackQueue: %s", nh_map.getNamespace().c_str());
+    //   globalmap_sub_ = nh_map.subscribe("/globalmap", 3, &HdlLocalizationNodelet::globalmapCallback, this);
+    //   // 立即检查订阅状态
+    //   NODELET_WARN("Subscriber created. Topic: %s", globalmap_sub_.getTopic().c_str());
+    //   NODELET_WARN("Is subscriber valid? %s", globalmap_sub_ ? "YES" : "NO");
+    //   for (int i = 0; i < 10 && ros::ok(); ++i) {
+    //     int num_pubs = globalmap_sub_.getNumPublishers();
+    //     NODELET_WARN("Publisher count for /globalmap: %d (check %d/10)", num_pubs, i + 1);
+    //     // ...
+    //   }
+    //   ros::Rate rate(200);  // 用高频非阻塞轮询，不退出
+    //   while (ros::ok()) {
+    //     map_queue_.callAvailable();
+    //     rate.sleep();
+    //   }
+    // });
+    map_thread_ = std::thread(&HdlLocalizationNodelet::mapThreadFunc, this);
 
     // updateDynamicTiles(pose_estimator->pos());
     // 延迟调用，确保地图线程已启动
     if (pose_estimator) {
       Eigen::Vector3f pos = pose_estimator->pos();
-      NODELET_INFO("Initial position for tile request: (%.2f, %.2f, %.2f)", pos.x(), pos.y(), pos.z());
+      NODELET_WARN("Initial position for tile request: (%.2f, %.2f, %.2f)", pos.x(), pos.y(), pos.z());
       updateDynamicTiles(pos);
     } else {
       NODELET_WARN("Pose estimator not initialized yet, will update tiles after first scan");
@@ -285,6 +315,24 @@ private:
     return nullptr;
   }
 
+  void mapThreadFunc() {
+    ros::NodeHandle nh_map;
+    nh_map.setCallbackQueue(&map_queue_);
+
+    NODELET_INFO("Map thread started!!");
+
+    globalmap_sub_ = nh_map.subscribe("/globalmap", 10, &HdlLocalizationNodelet::globalmapCallback, this);
+
+    // 等待latched消息
+    ros::topic::waitForMessage<sensor_msgs::PointCloud2>("/globalmap", nh_map);
+
+    ros::Rate rate(100);
+    while (ros::ok()) {
+      map_queue_.callAvailable(ros::WallDuration(0.01));
+      rate.sleep();
+    }
+  }
+
   void initialize_params() {
     // intialize scan matching method
     double downsample_resolution = private_nh.param<double>("downsample_resolution", 0.1);
@@ -330,40 +378,25 @@ private:
    * @param points_msg
    */
   void points_callback(const sensor_msgs::PointCloud2ConstPtr& points_msg) {
-    // 先检查是否有新地图需要切换
-    // {
-    //   std::lock_guard<std::mutex> lock(map_mutex);
-    //   if (has_staging_map) {
-    //     active_map = staging_map;
-    //     staging_map.reset(new pcl::PointCloud<PointT>());
-    //     has_staging_map = false;
-    //     map_ready = true;
-
-    //     NODELET_INFO("Active map updated.");
-    //     registration->setInputTarget(active_map);
-    //   }
-
-    //   if (!active_map) {
-    //     NODELET_WARN("No active map yet, skip frame.");
-    //     return;
-    //   }
-    // }
-
     {
       std::unique_lock<std::mutex> lock(map_mutex);
 
       if (has_staging_map) {
+        // 检查指针是否为null和空
+        if (!staging_map || staging_map->empty()) {
+          NODELET_WARN("staging_map is null");
+          return;
+        }
         active_map.swap(staging_map);
         has_staging_map = false;
+        if (!active_map || active_map->empty()) {
+          NODELET_WARN("No active map yet, skip frame.");
+          return;
+        }
 
         // 要确保 scan thread 不在注册过程中使用旧 target
         registration->setInputTarget(active_map);
-        NODELET_INFO("Active map updated.");
-      }
-
-      if (!active_map) {
-        NODELET_WARN("No active map yet, skip frame.");
-        return;
+        ROS_INFO("Active map updated.");
       }
     }
 
@@ -425,7 +458,9 @@ private:
       // 状态。您明白了吗？ 如果imu时间戳小于雷达的，就往下执行，一直执行到大于雷达时间戳的imu数据，那么旧的imu数据已经使用过删除
       for (imu_iter; imu_iter != imu_data.end(); imu_iter++) {
         // 如果当前观测值时间戳小于IMU数据时间戳，则跳出循环
-        if (stamp < (*imu_iter)->header.stamp) {
+        const ros::Time imu_time_corr = (*imu_iter)->header.stamp + ros::Duration(time_offset_lidar_to_imu);
+
+        if (stamp < imu_time_corr) {
           break;
         }
         const auto& imu_acc = (*imu_iter)->linear_acceleration;
@@ -446,7 +481,7 @@ private:
         Eigen::Vector3f acc = q_imu_to_base * acc_row;
         Eigen::Vector3f gyro = q_imu_to_base * gyro_row;
 
-        pose_estimator->predict((*imu_iter)->header.stamp, acc_sign * acc, gyro_sign * gyro);
+        pose_estimator->predict(imu_time_corr, acc_sign * acc, gyro_sign * gyro);
       }
       imu_data.erase(imu_data.begin(), imu_iter);
     }
@@ -494,15 +529,15 @@ private:
   }
 
   void updateDynamicTiles(const Eigen::Vector3f& position) {
-    NODELET_INFO("updateDynamicTiles - Position: (%.3f, %.3f, %.3f)", position.x(), position.y(), position.z());
+    // NODELET_INFO("updateDynamicTiles - Position: (%.3f, %.3f, %.3f)", position.x(), position.y(), position.z());
 
     // 1. 计算需要的瓦片
     std::vector<std::string> need_tiles = computeRequiredTiles(position);
-    NODELET_INFO("Number of tiles needed: %zu", need_tiles.size());
     // 2. 如果瓦片集合发生变化，发布请求
     if (need_tiles != last_tiles) {
       publishTileRequest(need_tiles);
       last_tiles = need_tiles;
+      NODELET_INFO("Number of tiles needed: %zu", need_tiles.size());
     }
   }
 
@@ -515,7 +550,7 @@ private:
     // 计算当前坐标所在的瓦片网格
     int current_tile_x = floor(position.x() / x_res) * x_res;  // 例如: 123.4 → 100
     int current_tile_y = floor(position.y() / y_res) * y_res;  // 例如: -178.9 → -200
-    NODELET_INFO("Current tile grid: (%d, %d)", current_tile_x, current_tile_y);
+    // NODELET_INFO("Current tile grid: (%d, %d)", current_tile_x, current_tile_y);
 
     std::vector<std::string> need_tiles;
 
@@ -526,7 +561,7 @@ private:
         float target_x = current_tile_x + dx * x_res;
         float target_y = current_tile_y + dy * y_res;
 
-        NODELET_INFO("  Checking tile at: (%.1f, %.1f)", target_x, target_y);
+        // NODELET_INFO("  Checking tile at: (%.1f, %.1f)", target_x, target_y);
 
         // 查找匹配的瓦片
         for (auto& kv : tile_map) {
@@ -606,7 +641,7 @@ private:
 
   // 新线程地图
   void globalmapCallback(const sensor_msgs::PointCloud2ConstPtr& msg) {
-    std::cout << "globalmapCallback received" << std::endl;
+    NODELET_WARN("globalmapCallback received");
     pcl::PointCloud<PointT>::Ptr new_map(new pcl::PointCloud<PointT>());
     pcl::fromROSMsg(*msg, *new_map);
 
@@ -622,7 +657,10 @@ private:
       map_ready = false;
     }
 
-    NODELET_INFO_STREAM("Global map updated, points=" << globalmap->size());
+    NODELET_INFO_STREAM("Global map updated, points=" << staging_map->size());
+    // globalmap空指针未初始化导致的内存崩溃
+    // NODELET_INFO_STREAM("Global map updated, points=" << globalmap->size());
+
     // 函数结束，lock_guard离开作用域，自动解锁！
   }
 
@@ -928,6 +966,8 @@ private:
   std::vector<std::string> last_tiles;
 
   ros::Publisher tile_request_pub;
+
+  double time_offset_lidar_to_imu;  // 时间偏移量
 
   // --- 新增：地图更新专用线程 ---
   std::thread map_thread_;

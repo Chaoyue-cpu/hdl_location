@@ -55,7 +55,7 @@
 
 <param name="globalmap_pcd" value="/media/scy/新加卷/数据集/Large-Scale-LiDAR-Inertial Dataset/seq06/map_myself/03-10.pcd" />
       <param name="convert_utm_to_local" value="true" />
-      <param name="downsample_resolution" value="10.0" />
+      <param name="downsample_resolution" value="0.3" />
     </node>
 
     <!-- hdl_localization_nodelet -->
@@ -95,7 +95,7 @@
     <param name="t_imu_to_base/x" value="0.050764" />
     <param name="t_imu_to_base/y" value="-0.034555" />
     <param name="t_imu_to_base/z" value="-0.094551" />
-    <!-- ======== 时间戳偏移 ======== -->
+    <!-- ======== 时间戳偏移,还没用上 ======== -->
     <param name="time_offset_lidar_to_imu" value="0.012634" />
     
       <!-- if "specify_init_pose" is true, pose estimator will be initialized with the following params -->
