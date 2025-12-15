@@ -10,7 +10,7 @@
 
 
   <!-- optional arguments，不用imu时除了use_global_localization全false -->
-  <arg name="use_imu" default="false" />
+  <arg name="use_imu" default="true" />
   <arg name="invert_imu_acc" default="false" />
   <arg name="invert_imu_gyro" default="false" />
   <arg name="use_global_localization" default="true" />
@@ -52,12 +52,19 @@
 <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/DLO_half_keyframe11_0.05resolution.pcd" /> -->
 
 <param name="globalmap_pcd" value="/media/scy/新加卷/数据集/locus多个地下矿井/真值/_ground_truth-20250124T153559Z-001/_ground_truth/D_Tunnel_Husky4_gt/h4_sr2_gt_map.pcd" />
+<param name="metadata_file" value="/home/scy/autoware_map_output/locus-d/hdl_map/pointcloud_map_metadata.yaml" />
+<param name="tile_map_dir" value="/home/scy/autoware_map_output/locus-d/hdl_map/pointcloud_map" />    
       <param name="convert_utm_to_local" value="true" />
-      <param name="downsample_resolution" value="0.5" />
+      <param name="downsample_resolution" value="0.15" />
     </node>
 
     <!-- hdl_localization_nodelet -->
     <node pkg="nodelet" type="nodelet" name="hdl_localization_nodelet" args="load hdl_localization/HdlLocalizationNodelet $(arg nodelet_manager)">
+     <!-- 地图参数 -->
+      <param name="metadata_file" value="/home/scy/autoware_map_output/locus-d/hdl_map/pointcloud_map_metadata.yaml" />
+      <param name="tile_radius" value="1" />   <!-- 1=3x3, 2=5x5 -->
+<param name="time_offset_lidar_to_imu" value="0.0" />
+
       <remap from="/velodyne_points" to="$(arg points_topic)" />
       <remap from="/gpsimu_driver/imu_data" to="$(arg imu_topic)" />
       <!-- odometry frame_id -->
@@ -81,55 +88,35 @@
       <!-- 初始0.1，会有个别帧索引溢出的问题 -->
       <param name="downsample_resolution" value="0.2" />
           <!-- ======== IMU to base 的四元数 ======== -->
-    <param name="q_imu_to_base/x" value="0.00600019" />
-    <param name="q_imu_to_base/y" value="-0.00249943" />
-    <param name="q_imu_to_base/z" value="0.384522" />
-    <param name="q_imu_to_base/w" value="0.923093" />
+    <param name="q_imu_to_base/x" value="-0.00600015" />
+    <param name="q_imu_to_base/y" value="-0.00249941" />
+    <param name="q_imu_to_base/z" value="0.38452226" />
+    <param name="q_imu_to_base/w" value="0.92309283" />
 
     <!-- ======== IMU to base 的平移 ======== -->
-    <param name="t_imu_to_base/x" value="0.0" />
-    <param name="t_imu_to_base/y" value="0.0" />
-    <param name="t_imu_to_base/z" value="0.0" />
+    <param name="t_imu_to_base/x" value="0.07876796" />
+    <param name="t_imu_to_base/y" value="0.12892248" />
+    <param name="t_imu_to_base/z" value="-0.24047371" />
       <!-- if "specify_init_pose" is true, pose estimator will be initialized with the following params -->
       <!-- otherwise, you need to input an initial pose with "2D Pose Estimate" on rviz" -->
-      <!-- imu_0805 -->
-      <!-- <param name="specify_init_pose" value="true" />
-      <param name="init_pos_x" value="0.0" />
-      <param name="init_pos_y" value="0.0" />
-      <param name="init_pos_z" value="0.0" />
-      <param name="init_ori_w" value="1.8954395517797516e-08" />
-      <param name="init_ori_x" value="0.7073882691671995" />
-      <param name="init_ori_y" value="1.8939307631412416e-08" />
-      <param name="init_ori_z" value="-0.7068251811053657" /> -->
-       <!-- <param name="specify_init_pose" value="true" />
-      <param name="init_pos_x" value="1460.0" />
-      <param name="init_pos_y" value="-225.0" />
-      <param name="init_pos_z" value="-100" />
-      <param name="init_ori_w" value="0.0" />
-      <param name="init_ori_x" value="0.0" />
-      <param name="init_ori_y" value="0.0" />
-      <param name="init_ori_z" value="1.0" />  -->
-      <!-- 760s使用imu初值 -->
-      <!-- <param name="init_pos_x" value="1250.0" />
-      <param name="init_pos_y" value="-144.0" />
-      <param name="init_pos_z" value="0.0" /> -->
-      <!-- <param name="init_ori_w" value="1" />
-      <param name="init_ori_x" value="-0.2" />
-      <param name="init_ori_y" value="0.5" />
-      <param name="init_ori_z" value="0.5" /> -->
-
-      <!-- <param name="init_ori_w" value="1" />
-      <param name="init_ori_x" value="-1.0" />
-      <param name="init_ori_y" value="0.5" />
-      <param name="init_ori_z" value="0.5" /> -->
-<param name="specify_init_pose" value="true" />
+      <!--gt地图初始位姿  -->
+<!-- <param name="specify_init_pose" value="true" />
       <param name="init_pos_x" value="-7.8762" />
       <param name="init_pos_y" value="214.731387" />
       <param name="init_pos_z" value="1.985952" />
       <param name="init_ori_w" value="0.999668" />
       <param name="init_ori_x" value="0.018043" />
       <param name="init_ori_y" value="-0.007775" />
-      <param name="init_ori_z" value="0.016691" />
+      <param name="init_ori_z" value="0.016691" /> -->
+
+      <param name="specify_init_pose" value="true" />
+      <param name="init_pos_x" value="0.0" />
+      <param name="init_pos_y" value="0.0" />
+      <param name="init_pos_z" value="0.0" />
+      <param name="init_ori_w" value="1.0" />
+      <param name="init_ori_x" value="0.0" />
+      <param name="init_ori_y" value="0.0" />
+      <param name="init_ori_z" value="0.0" />
       <param name="use_global_localization" value="$(arg use_global_localization)" />
     </node>
 <!-- 修改 -->
