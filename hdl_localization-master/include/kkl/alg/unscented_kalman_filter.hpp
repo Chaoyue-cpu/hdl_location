@@ -10,17 +10,18 @@
 #include <Eigen/Dense>
 
 namespace kkl {
-  namespace alg {
+namespace alg {
 
 /**
  * @brief Unscented Kalman Filter class
  * @param T        scaler type
  * @param System   system class to be estimated
  */
-template<typename T, class System>
+template <typename T, class System>
 class UnscentedKalmanFilterX {
   typedef Eigen::Matrix<T, Eigen::Dynamic, 1> VectorXt;
   typedef Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> MatrixXt;
+
 public:
   /**
    * @brief constructor 构造函数
@@ -33,7 +34,7 @@ public:
    * @param mean                 initial mean
    * @param cov                  initial covariance
    */
-    /**
+  /**
    * @brief 无迹卡尔曼滤波器的构造函数
    * @param system               待估计的系统模型
    * @param state_dim            状态向量的维度
@@ -44,21 +45,29 @@ public:
    * @param mean                 初始状态向量的均值
    * @param cov                  初始状态向量的协方差矩阵
    */
-  UnscentedKalmanFilterX(const System& system, int state_dim, int input_dim, int measurement_dim, const MatrixXt& process_noise, const MatrixXt& measurement_noise, const VectorXt& mean, const MatrixXt& cov)
-    : state_dim(state_dim),          // 初始化状态向量维度
-    input_dim(input_dim),            // 初始化输入向量维度
-    measurement_dim(measurement_dim),// 初始化测量向量维度
-    N(state_dim),                    // N 表示状态向量维度
-    M(input_dim),                    // M 表示输入向量维度
-    K(measurement_dim),              // K 表示测量向量维度
-    S(2 * state_dim + 1),            // S 表示 Sigma 点的数量，公式为 2n + 1
-    mean(mean),                      // 初始化状态向量的均值
-    cov(cov),                        // 初始化状态向量的协方差矩阵
-    system(system),                  // 初始化系统模型
-    process_noise(process_noise),    // 初始化过程噪声协方差矩阵
-    measurement_noise(measurement_noise), // 初始化测量噪声协方差矩阵
-    lambda(1),                       // 初始化无迹变换的缩放参数 lambda
-    normal_dist(0.0, 1.0)            // 初始化正态分布，均值为 0，标准差为 1
+  UnscentedKalmanFilterX(
+    const System& system,
+    int state_dim,
+    int input_dim,
+    int measurement_dim,
+    const MatrixXt& process_noise,
+    const MatrixXt& measurement_noise,
+    const VectorXt& mean,
+    const MatrixXt& cov)
+  : state_dim(state_dim),                  // 初始化状态向量维度
+    input_dim(input_dim),                  // 初始化输入向量维度
+    measurement_dim(measurement_dim),      // 初始化测量向量维度
+    N(state_dim),                          // N 表示状态向量维度
+    M(input_dim),                          // M 表示输入向量维度
+    K(measurement_dim),                    // K 表示测量向量维度
+    S(2 * state_dim + 1),                  // S 表示 Sigma 点的数量，公式为 2n + 1
+    mean(mean),                            // 初始化状态向量的均值
+    cov(cov),                              // 初始化状态向量的协方差矩阵
+    system(system),                        // 初始化系统模型
+    process_noise(process_noise),          // 初始化过程噪声协方差矩阵
+    measurement_noise(measurement_noise),  // 初始化测量噪声协方差矩阵
+    lambda(1),                             // 初始化无迹变换的缩放参数 lambda
+    normal_dist(0.0, 1.0)                  // 初始化正态分布，均值为 0，标准差为 1
   {
     // 调整权重向量的大小，用于计算 Sigma 点的加权和
     weights.resize(S, 1);
@@ -88,7 +97,6 @@ public:
     }
   }
 
-
   /**
    * @brief predict
    * @param control  input vector
@@ -96,44 +104,43 @@ public:
   void predict() {
     // 确保协方差矩阵的所有元素都是有效数（非 NaN、非负、非无穷）
     ensurePositiveFinite(cov);
-  
+
     // 1. 从当前状态均值 mean 和协方差 cov 计算 sigma 点
     computeSigmaPoints(mean, cov, sigma_points);
-  
+
     // 2. 所有 sigma 点分别输入状态转移函数 f 传播一次
     for (int i = 0; i < S; i++) {
       sigma_points.row(i) = system.f(sigma_points.row(i));
     }
-  
+
     // 3. 获取过程噪声协方差
     const auto& R = process_noise;
-  
+
     // 4. 初始化预测结果的均值与协方差
     VectorXt mean_pred(mean.size());
     MatrixXt cov_pred(cov.rows(), cov.cols());
-  
+
     mean_pred.setZero();
     cov_pred.setZero();
-  
+
     // 5. 计算预测后的均值
     for (int i = 0; i < S; i++) {
       mean_pred += weights[i] * sigma_points.row(i);  // 加权平均
     }
-  
+
     // 6. 计算预测后的协方差
     for (int i = 0; i < S; i++) {
       VectorXt diff = sigma_points.row(i).transpose() - mean_pred;
       cov_pred += weights[i] * diff * diff.transpose();  // 加权 outer product
     }
-  
+
     // 7. 加上过程噪声
     cov_pred += R;
-  
+
     // 8. 更新滤波器的当前状态与协方差
     mean = mean_pred;
     cov = cov_pred;
   }
-  
 
   /**
    * @brief predict
@@ -142,43 +149,44 @@ public:
   void predict(const VectorXt& control) {
     // 校验协方差合法性
     ensurePositiveFinite(cov);
-  
+
     // 从均值和协方差生成 sigma 点
     computeSigmaPoints(mean, cov, sigma_points);
-  
+
     // 所有 sigma 点输入带控制量的状态转移函数 f(x, u)
     for (int i = 0; i < S; i++) {
+      // 预测函数system.f，predict
       sigma_points.row(i) = system.f(sigma_points.row(i), control);
     }
-  
+
     // 后续与无控制版本完全一致：
     const auto& R = process_noise;
-  
+
     VectorXt mean_pred(mean.size());
     MatrixXt cov_pred(cov.rows(), cov.cols());
-  
+
     mean_pred.setZero();
     cov_pred.setZero();
-  
+
     for (int i = 0; i < S; i++) {
       mean_pred += weights[i] * sigma_points.row(i);
     }
-  
+
     for (int i = 0; i < S; i++) {
       VectorXt diff = sigma_points.row(i).transpose() - mean_pred;
       cov_pred += weights[i] * diff * diff.transpose();
     }
-  
+
     cov_pred += R;
-  
+
     mean = mean_pred;
     cov = cov_pred;
   }
-  
 
   /**
    * @brief correct
    * @param measurement  measurement vector
+   * 校正函数
    */
   void correct(const VectorXt& measurement) {
     // create extended state space which includes error variances
@@ -192,6 +200,8 @@ public:
     computeSigmaPoints(ext_mean_pred, ext_cov_pred, ext_sigma_points);
 
     // unscented transform
+    // system.h(x) 的输入是“状态 sigma 点”，输出是“该状态在观测空间下的预测观测值”
+    // ext_sigma_points[i].topLeftCorner(N) 是 第 i 个状态 sigma 点
     expected_measurements.setZero();
     for (int i = 0; i < ext_sigma_points.rows(); i++) {
       expected_measurements.row(i) = system.h(ext_sigma_points.row(i).transpose().topLeftCorner(N, 1));
@@ -218,7 +228,8 @@ public:
 
     kalman_gain = sigma * expected_measurement_cov.inverse();
     const auto& K = kalman_gain;
-
+    // 残差，measurement直接雷达观测值，expected_measurement_mean点预测值，中间计算较多的主要是卡尔曼增益K
+    // K×残差为更新量ext_mean
     VectorXt ext_mean = ext_mean_pred + K * (measurement - expected_measurement_mean);
     MatrixXt ext_cov = ext_cov_pred - K * expected_measurement_cov * K.transpose();
 
@@ -239,11 +250,23 @@ public:
   const MatrixXt& getKalmanGain() const { return kalman_gain; }
 
   /*			setter			*/
-  UnscentedKalmanFilterX& setMean(const VectorXt& m) { mean = m;			return *this; }
-  UnscentedKalmanFilterX& setCov(const MatrixXt& s) { cov = s;			return *this; }
+  UnscentedKalmanFilterX& setMean(const VectorXt& m) {
+    mean = m;
+    return *this;
+  }
+  UnscentedKalmanFilterX& setCov(const MatrixXt& s) {
+    cov = s;
+    return *this;
+  }
 
-  UnscentedKalmanFilterX& setProcessNoiseCov(const MatrixXt& p) { process_noise = p;			return *this; }
-  UnscentedKalmanFilterX& setMeasurementNoiseCov(const MatrixXt& m) { measurement_noise = m;	return *this; }
+  UnscentedKalmanFilterX& setProcessNoiseCov(const MatrixXt& p) {
+    process_noise = p;
+    return *this;
+  }
+  UnscentedKalmanFilterX& setMeasurementNoiseCov(const MatrixXt& m) {
+    measurement_noise = m;
+    return *this;
+  }
 
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 private:
@@ -261,8 +284,8 @@ public:
   MatrixXt cov;
 
   System system;
-  MatrixXt process_noise;		//
-  MatrixXt measurement_noise;	//
+  MatrixXt process_noise;      //
+  MatrixXt measurement_noise;  //
 
   T lambda;
   VectorXt weights;
@@ -280,7 +303,7 @@ private:
    * @param cov           covariance
    * @param sigma_points  calculated sigma points
    */
-    /**
+  /**
    * @brief 计算无迹卡尔曼滤波所需的 Sigma 点
    * @param mean          状态向量的均值
    * @param cov           状态向量的协方差矩阵
@@ -310,12 +333,11 @@ private:
     }
   }
 
-
   /**
    * @brief make covariance matrix positive finite
    * @param cov  covariance matrix
    */
-    /**
+  /**
    * @brief 确保协方差矩阵为正定且有限的矩阵。
    *        在实际计算中，由于数值误差，协方差矩阵可能失去正定性，
    *        此函数通过特征值分解修正协方差矩阵，使其满足正定性要求。
@@ -353,7 +375,6 @@ private:
     cov = V * D * V.inverse();
   }
 
-
 public:
   MatrixXt kalman_gain;
 
@@ -361,8 +382,7 @@ public:
   std::normal_distribution<T> normal_dist;
 };
 
-  }
-}
-
+}  // namespace alg
+}  // namespace kkl
 
 #endif

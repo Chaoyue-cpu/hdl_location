@@ -55,7 +55,7 @@
 <param name="metadata_file" value="/home/scy/autoware_map_output/locus-d/gt/pointcloud_map_metadata.yaml" />
 <param name="tile_map_dir" value="/home/scy/autoware_map_output/locus-d/gt/pointcloud_map" />    
       <param name="convert_utm_to_local" value="true" />
-      <param name="downsample_resolution" value="0.15" />
+      <param name="downsample_resolution" value="-0.15" />
     </node>
 
     <!-- hdl_localization_nodelet -->

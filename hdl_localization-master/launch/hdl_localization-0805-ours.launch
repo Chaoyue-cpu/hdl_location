@@ -2,11 +2,11 @@
 <launch>
   <!-- arguments -->
   <arg name="nodelet_manager" default="velodyne_nodelet_manager" />
-  <arg name="points_topic" default="/velodyne_points" />
+  <arg name="points_topic" default="/perception/lidar_up_pointcloud" />
   <!-- input clouds are transformed in odom_child_frame, and then localization is performed in that frame -->
   <!-- this is useful to match the LIDAR and IMU coodinate systems -->
   <!-- <arg name="odom_child_frame_id" default="imu_link" /> -->
-    <arg name="odom_child_frame_id" default="husky4/velodyne" />
+    <arg name="odom_child_frame_id" default="base_link" />
 
 
   <!-- optional arguments，不用imu时除了use_global_localization全false -->
@@ -14,7 +14,7 @@
   <arg name="invert_imu_acc" default="false" />
   <arg name="invert_imu_gyro" default="false" />
   <arg name="use_global_localization" default="false" />
-  <arg name="imu_topic" default="/husky4/vn100/imu" />
+  <arg name="imu_topic" default="/localization/imu" />
   <arg name="enable_robot_odometry_prediction" value="false" />
   <arg name="robot_odom_frame_id" value="odom" />
   <arg name="plot_estimation_errors" value="false" />
@@ -52,16 +52,16 @@
 <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/DLO_half_keyframe11_0.05resolution.pcd" /> -->
 
 <param name="globalmap_pcd" value="/media/scy/新加卷/数据集/locus多个地下矿井/真值/_ground_truth-20250124T153559Z-001/_ground_truth/D_Tunnel_Husky4_gt/h4_sr2_gt_map.pcd" />
-<param name="metadata_file" value="/home/scy/autoware_map_output/locus-d/lego_loam_map/pointcloud_map_metadata.yaml" />
-<param name="tile_map_dir" value="/home/scy/autoware_map_output/locus-d/lego_loam_map/pointcloud_map" />    
+<param name="metadata_file" value="/home/scy/autoware_map_output/0805/ours/pointcloud_map_metadata.yaml" />
+<param name="tile_map_dir" value="/home/scy/autoware_map_output/0805/ours/pointcloud_map.pcd" />    
       <param name="convert_utm_to_local" value="true" />
-      <param name="downsample_resolution" value="0.15" />
+      <param name="downsample_resolution" value="0.2" />
     </node>
 
     <!-- hdl_localization_nodelet -->
     <node pkg="nodelet" type="nodelet" name="hdl_localization_nodelet" args="load hdl_localization/HdlLocalizationNodelet $(arg nodelet_manager)">
      <!-- 地图参数 -->
-      <param name="metadata_file" value="/home/scy/autoware_map_output/locus-d/lego_loam_map/pointcloud_map_metadata.yaml" />
+      <param name="metadata_file" value="/home/scy/autoware_map_output/0805/ours/pointcloud_map_metadata.yaml" />
       <param name="tile_radius" value="1" />   <!-- 1=3x3, 2=5x5 -->
 <param name="time_offset_lidar_to_imu" value="0.0" />
 
@@ -88,28 +88,20 @@
       <!-- 初始0.1，会有个别帧索引溢出的问题 -->
       <param name="downsample_resolution" value="0.2" />
           <!-- ======== IMU to base 的四元数 ======== -->
-    <param name="q_imu_to_base/x" value="-0.00600015" />
-    <param name="q_imu_to_base/y" value="-0.00249941" />
-    <param name="q_imu_to_base/z" value="0.38452226" />
-    <param name="q_imu_to_base/w" value="0.92309283" />
+    <param name="q_imu_to_base/x" value="1.0" />
+    <param name="q_imu_to_base/y" value="0.0" />
+    <param name="q_imu_to_base/z" value="0.0" />
+    <param name="q_imu_to_base/w" value="0.0" />
+
 
     <!-- ======== IMU to base 的平移 ======== -->
-    <param name="t_imu_to_base/x" value="0.07876796" />
-    <param name="t_imu_to_base/y" value="0.12892248" />
-    <param name="t_imu_to_base/z" value="-0.24047371" />
+    <param name="t_imu_to_base/x" value="0.0" />
+    <param name="t_imu_to_base/y" value="0.0" />
+    <param name="t_imu_to_base/z" value="0.0" />
       <!-- if "specify_init_pose" is true, pose estimator will be initialized with the following params -->
       <!-- otherwise, you need to input an initial pose with "2D Pose Estimate" on rviz" -->
       <!--gt地图初始位姿  -->
-<!-- <param name="specify_init_pose" value="true" />
-      <param name="init_pos_x" value="-7.8762" />
-      <param name="init_pos_y" value="214.731387" />
-      <param name="init_pos_z" value="1.985952" />
-      <param name="init_ori_w" value="0.999668" />
-      <param name="init_ori_x" value="0.018043" />
-      <param name="init_ori_y" value="-0.007775" />
-      <param name="init_ori_z" value="0.016691" /> -->
-
-      <param name="specify_init_pose" value="true" />
+    <param name="specify_init_pose" value="true" />
       <param name="init_pos_x" value="0.0" />
       <param name="init_pos_y" value="0.0" />
       <param name="init_pos_z" value="0.0" />
@@ -117,6 +109,8 @@
       <param name="init_ori_x" value="0.0" />
       <param name="init_ori_y" value="0.0" />
       <param name="init_ori_z" value="0.0" />
+
+      
       <param name="use_global_localization" value="$(arg use_global_localization)" />
     </node>
 <!-- 修改 -->

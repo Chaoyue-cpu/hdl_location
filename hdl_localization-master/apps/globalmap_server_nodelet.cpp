@@ -135,14 +135,19 @@ private:
       }
 
       double downsample_resolution = private_nh.param<double>("downsample_resolution", 20);
-      boost::shared_ptr<pcl::VoxelGrid<PointT>> voxelgrid(new pcl::VoxelGrid<PointT>());
-      voxelgrid->setLeafSize(downsample_resolution, downsample_resolution, downsample_resolution);
-      voxelgrid->setInputCloud(cloud);
+      if (downsample_resolution > 0.0) {
+        boost::shared_ptr<pcl::VoxelGrid<PointT>> voxelgrid(new pcl::VoxelGrid<PointT>());
+        voxelgrid->setLeafSize(downsample_resolution, downsample_resolution, downsample_resolution);
+        voxelgrid->setInputCloud(cloud);
 
-      pcl::PointCloud<PointT>::Ptr filtered(new pcl::PointCloud<PointT>());
-      voxelgrid->filter(*filtered);
+        pcl::PointCloud<PointT>::Ptr filtered(new pcl::PointCloud<PointT>());
+        voxelgrid->filter(*filtered);
 
-      *merged += *filtered;
+        *merged += *filtered;
+
+      } else {
+        *merged += *cloud;
+      }
     }
 
     merged->header.frame_id = "map";

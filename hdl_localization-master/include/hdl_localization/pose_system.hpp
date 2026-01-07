@@ -1,6 +1,6 @@
 #ifndef POSE_SYSTEM_HPP
 #define POSE_SYSTEM_HPP
-#include <iostream> 
+#include <iostream>
 
 #include <kkl/alg/unscented_kalman_filter.hpp>
 
@@ -17,13 +17,12 @@ public:
   typedef Eigen::Matrix<T, 4, 4> Matrix4t;
   typedef Eigen::Matrix<T, Eigen::Dynamic, 1> VectorXt;
   typedef Eigen::Quaternion<T> Quaterniont;
+
 public:
-  PoseSystem() {
-    dt = 0.01;
-  }
+  PoseSystem() { dt = 0.01; }
 
   // system equation (without input)
-  //恒速模型
+  // 恒速模型
   VectorXt f(const VectorXt& state) const {
     VectorXt next_state(16);
 
@@ -74,25 +73,25 @@ public:
     Vector3t g(0.0f, 0.0f, 9.80665f);
     // Vector3t g(9.80665f, 0.0f, 0.0f);
     // std::cout << "g (with gravity): " << g.transpose() << std::endl;
-//使用imu预测
+    // 使用imu预测
     Vector3t acc_ = raw_acc - acc_bias;
     Vector3t acc = qt * acc_;
     // std::cout << "acc_world (with gravity): " << acc.transpose() << std::endl;
 
     next_state.middleRows(3, 3) = vt + (acc - g) * dt;
-    // std::cout << "acc_world-g (with gravity): " << (acc-g).transpose() << std::endl;
+    std::cout << "acc_world-g (with gravity): " << (acc - g).transpose() << std::endl;
 
     // next_state.middleRows(3, 3) = vt; // + (acc - g) * dt;		// acceleration didn't contribute to accuracy due to large noise
 
     // orientation
-    //使用imu预测
+    // 使用imu预测
     Vector3t gyro = raw_gyro - gyro_bias;
     Quaterniont dq(1, gyro[0] * dt / 2, gyro[1] * dt / 2, gyro[2] * dt / 2);
     dq.normalize();
     Quaterniont qt_ = (qt * dq).normalized();
-    //恒速模型
-    // Quaterniont qt_(state[6], state[7], state[8], state[9]);
-    // qt_.normalize();
+    // 恒速模型
+    //  Quaterniont qt_(state[6], state[7], state[8], state[9]);
+    //  qt_.normalize();
 
     next_state.middleRows(6, 4) << qt_.w(), qt_.x(), qt_.y(), qt_.z();
     next_state.middleRows(10, 3) = state.middleRows(10, 3);  // constant bias on acceleration
@@ -101,7 +100,7 @@ public:
     return next_state;
   }
 
-  // observation equation
+  // observation equation，观测函数
   VectorXt h(const VectorXt& state) const {
     VectorXt observation(7);
     observation.middleRows(0, 3) = state.middleRows(0, 3);
@@ -113,6 +112,6 @@ public:
   double dt;
 };
 
-}
+}  // namespace hdl_localization
 
-#endif // POSE_SYSTEM_HPP
+#endif  // POSE_SYSTEM_HPP

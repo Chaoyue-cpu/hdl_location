@@ -78,7 +78,7 @@ PoseEstimator::PoseEstimator(pcl::Registration<PointT, PointT>::Ptr& registratio
   // 创建系统模型（预测模型），用于UKF中状态传播
   PoseSystem system;
 
-  // 构造UKF滤波器（16维状态，6维控制，7维观测）
+  // 构造UKF滤波器（16维状态，6维控制，7维观测），构造函数定义在ukf头文件里
   ukf.reset(new kkl::alg::UnscentedKalmanFilterX<float, PoseSystem>(
     system,             // 系统模型
     16,                 // 状态维度
