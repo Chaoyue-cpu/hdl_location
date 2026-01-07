@@ -190,35 +190,47 @@ public:
    */
   void correct(const VectorXt& measurement) {
     // create extended state space which includes error variances
+    // N：原始状态维度（您的系统是16），K：观测维度（您的系统是7），这里表示的是观测噪声，扩展是将观测噪声加入状态空间中，作为一部分，白噪声均值是0
     VectorXt ext_mean_pred = VectorXt::Zero(N + K, 1);
+    // 扩展状态协方差矩阵，维度 = (N + K) × (N + K) = 23×23
     MatrixXt ext_cov_pred = MatrixXt::Zero(N + K, N + K);
+    // mean是预测完的预测值，填充原始状态部分，cov在预测中改变过
     ext_mean_pred.topLeftCorner(N, 1) = VectorXt(mean);
     ext_cov_pred.topLeftCorner(N, N) = MatrixXt(cov);
+    // measurement_noise参数写死了，在构造函数中初始化
     ext_cov_pred.bottomRightCorner(K, K) = measurement_noise;
-
+    // 检查协方差矩阵是否正定、有限，防止数值问题导致滤波发散，长时间运行时可能需要
     ensurePositiveFinite(ext_cov_pred);
+    // 生成 2*(N+K)+1 个Sigma点，ext_sigma_points矩阵每一行代表一个点，维度是N+K，代表一个状态
     computeSigmaPoints(ext_mean_pred, ext_cov_pred, ext_sigma_points);
 
     // unscented transform
     // system.h(x) 的输入是“状态 sigma 点”，输出是“该状态在观测空间下的预测观测值”
     // ext_sigma_points[i].topLeftCorner(N) 是 第 i 个状态 sigma 点
+    // z = h(x)+v，拿预测的观测值生成理想预测观测，对于第i个Sigma点，计算其对应的预测观测值。
     expected_measurements.setZero();
     for (int i = 0; i < ext_sigma_points.rows(); i++) {
       expected_measurements.row(i) = system.h(ext_sigma_points.row(i).transpose().topLeftCorner(N, 1));
       expected_measurements.row(i) += VectorXt(ext_sigma_points.row(i).transpose().bottomRightCorner(K, 1));
     }
-
+    // 加权平均
     VectorXt expected_measurement_mean = VectorXt::Zero(K);
     for (int i = 0; i < ext_sigma_points.rows(); i++) {
       expected_measurement_mean += ext_weights[i] * expected_measurements.row(i);
     }
+    // 计算预测观测的协方差
     MatrixXt expected_measurement_cov = MatrixXt::Zero(K, K);
     for (int i = 0; i < ext_sigma_points.rows(); i++) {
+      // 对角线元素 dᵢ*dᵢ：第i维观测的方差，非对角线元素 dᵢ*dⱼ：第i维和第j维观测的协方差（相关性）
       VectorXt diff = expected_measurements.row(i).transpose() - expected_measurement_mean;
       expected_measurement_cov += ext_weights[i] * diff * diff.transpose();
     }
 
     // calculated transformed covariance
+    // diffA(N+K)×1：第i个Sigma点与扩展状态均值的偏差
+    // diffB（K×1）：第i个预测观测与观测均值的偏差
+    // diffA * diffBᵀ：这两者偏差的相关性
+    // sigma：加权平均的相关性 = 状态变化如何影响观测变化
     MatrixXt sigma = MatrixXt::Zero(N + K, K);
     for (int i = 0; i < ext_sigma_points.rows(); i++) {
       auto diffA = (ext_sigma_points.row(i).transpose() - ext_mean_pred);
@@ -229,7 +241,7 @@ public:
     kalman_gain = sigma * expected_measurement_cov.inverse();
     const auto& K = kalman_gain;
     // 残差，measurement直接雷达观测值，expected_measurement_mean点预测值，中间计算较多的主要是卡尔曼增益K
-    // K×残差为更新量ext_mean
+    // K×残差为更新量ext_mean，measurement输入量只在这里用到了
     VectorXt ext_mean = ext_mean_pred + K * (measurement - expected_measurement_mean);
     MatrixXt ext_cov = ext_cov_pred - K * expected_measurement_cov * K.transpose();
 
@@ -342,6 +354,10 @@ private:
    *        在实际计算中，由于数值误差，协方差矩阵可能失去正定性，
    *        此函数通过特征值分解修正协方差矩阵，使其满足正定性要求。
    * @param cov 待处理的协方差矩阵，函数会直接修改该矩阵的值。
+   * 长时间运行	数值误差累积	数小时~数天后
+    剧烈运动	高速旋转、急加速导致数值不稳定	特定动作时
+    传感器失效	GICP匹配失败，观测噪声突增	匹配失败时
+    参数不当	噪声矩阵设置过小	参数调试期间
    */
   void ensurePositiveFinite(MatrixXt& cov) {
     // 注意：当前函数直接返回，后续修正协方差矩阵的代码不会执行。

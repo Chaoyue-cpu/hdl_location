@@ -658,8 +658,6 @@ private:
     }
 
     NODELET_INFO_STREAM("Global map updated, points=" << staging_map->size());
-    // globalmap空指针未初始化导致的内存崩溃
-    // NODELET_INFO_STREAM("Global map updated, points=" << globalmap->size());
 
     // 函数结束，lock_guard离开作用域，自动解锁！
   }

@@ -19,7 +19,7 @@
   <arg name="imu_topic" default="/imu/data" />
   <arg name="enable_robot_odometry_prediction" value="false" />
   <arg name="robot_odom_frame_id" value="odom" />
-  <arg name="plot_estimation_errors" value="true" />
+  <arg name="plot_estimation_errors" value="false" />
 
   <include file="$(find hdl_global_localization)/launch/hdl_global_localization.launch" if="$(arg use_global_localization)" />
 <!-- 雷达和imu之间坐标变换，新加修改,参数顺序：yaw pitch roll -->
