@@ -395,8 +395,14 @@ private:
         }
 
         // 要确保 scan thread 不在注册过程中使用旧 target
+        // ========== setInputTarget（如果你每帧都在调） ==========
+        auto t_target_start = std::chrono::steady_clock::now();
         registration->setInputTarget(active_map);
         ROS_INFO("Active map updated.");
+        auto t_target_end = std::chrono::steady_clock::now();
+        double target_time_ms = std::chrono::duration<double, std::milli>(t_target_end - t_target_start).count();
+
+        std::cout << "[GICP] target time: " << target_time_ms << " ms, pts: " << std::endl;
       }
     }
 
@@ -458,7 +464,7 @@ private:
       // 状态。您明白了吗？ 如果imu时间戳小于雷达的，就往下执行，一直执行到大于雷达时间戳的imu数据，那么旧的imu数据已经使用过删除
       for (imu_iter; imu_iter != imu_data.end(); imu_iter++) {
         // 如果当前观测值时间戳小于IMU数据时间戳，则跳出循环
-        const ros::Time imu_time_corr = (*imu_iter)->header.stamp + ros::Duration(time_offset_lidar_to_imu);
+        const ros::Time imu_time_corr = (*imu_iter)->header.stamp - ros::Duration(time_offset_lidar_to_imu);
 
         if (stamp < imu_time_corr) {
           break;

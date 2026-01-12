@@ -10,10 +10,11 @@
 #include <pcl/registration/registration.h>
 
 namespace kkl {
-  namespace alg {
-template<typename T, class System> class UnscentedKalmanFilterX;
-  }
+namespace alg {
+template <typename T, class System>
+class UnscentedKalmanFilterX;
 }
+}  // namespace kkl
 
 namespace hdl_localization {
 
@@ -26,6 +27,7 @@ class OdomSystem;
 class PoseEstimator {
 public:
   using PointT = pcl::PointXYZI;
+  void set_registration(const pcl::Registration<PointT, PointT>::Ptr& reg) { registration = reg; }
 
   /**
    * @brief constructor
@@ -65,7 +67,7 @@ public:
 
   /* getters */
   ros::Time last_correction_time() const;
-//位置速度旋转
+  // 位置速度旋转
   Eigen::Vector3f pos() const;
   Eigen::Vector3f vel() const;
   Eigen::Quaternionf quat() const;
@@ -80,13 +82,12 @@ public:
   const boost::optional<Eigen::Matrix4f>& odom_prediction_error() const;
   const boost::optional<Eigen::Matrix4f>& imu_odom_prediction_error() const;
 
-
 private:
-  ros::Time init_stamp;             // when the estimator was initialized
-  ros::Time prev_stamp;             // when the estimator was updated last time
-  //校正步骤（correction step） 的数学本质是通过融合预测值与观测值，得到最优估计（Minimum Mean Square Error Estimate）。
-  //当前时刻的最优状态估计值，可直接输出使用。
-  //若系统持续运行（如SLAM），该结果会作为下一时刻预测的初始值+运动模型，形成“预测-校正”循环。
+  ros::Time init_stamp;  // when the estimator was initialized
+  ros::Time prev_stamp;  // when the estimator was updated last time
+  // 校正步骤（correction step） 的数学本质是通过融合预测值与观测值，得到最优估计（Minimum Mean Square Error Estimate）。
+  // 当前时刻的最优状态估计值，可直接输出使用。
+  // 若系统持续运行（如SLAM），该结果会作为下一时刻预测的初始值+运动模型，形成“预测-校正”循环。
   ros::Time last_correction_stamp;  // when the estimator performed the correction step
   double cool_time_duration;        //
 
@@ -100,9 +101,8 @@ private:
   boost::optional<Eigen::Matrix4f> odom_pred_error;
   boost::optional<Eigen::Matrix4f> imu_odom_pred_error;
 
-
   pcl::Registration<PointT, PointT>::Ptr registration;
-  };
+};
 
 }  // namespace hdl_localization
 

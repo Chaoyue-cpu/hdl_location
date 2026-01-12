@@ -58,7 +58,7 @@
 
 <param name="globalmap_pcd" value="/media/scy/新加卷/数据集/Large-Scale-LiDAR-Inertial Dataset/seq06/map_myself/03-10.pcd" />
       <param name="convert_utm_to_local" value="true" />
-      <param name="downsample_resolution" value="0.3" />
+      <param name="downsample_resolution" value="0.4" />
     </node>
 
     <!-- hdl_localization_nodelet -->

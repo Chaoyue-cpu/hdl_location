@@ -270,7 +270,18 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   pcl::PointCloud<PointT>::Ptr aligned(new pcl::PointCloud<PointT>());
   // 当前帧雷达点云
   registration->setInputSource(cloud);
+  // ====== 开始计时 ======
+  auto t_start = std::chrono::steady_clock::now();
+
   registration->align(*aligned, init_guess);
+
+  // ====== 结束计时 ======
+  auto t_end = std::chrono::steady_clock::now();
+
+  // 计算耗时（毫秒）
+  double align_time_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+
+  std::cout << "[GICP] align time: " << align_time_ms << " ms" << std::endl;
 
   // 提取最终变换矩阵
   Eigen::Matrix4f trans = registration->getFinalTransformation();
