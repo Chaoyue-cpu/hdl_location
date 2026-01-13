@@ -52,18 +52,18 @@
 <!-- 定位正常 -->
 <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/dlo_map_all_1.pcd" /> -->
 <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/DLO_half_keyframe11_0.05resolution.pcd" /> -->
-<!-- 地址没写对，会导致节点崩溃 -->
-<param name="metadata_file" value="/home/scy/autoware_map_output/large_inertial/gt/pointcloud_map_metadata.yaml" />
-<param name="tile_map_dir" value="/home/scy/autoware_map_output/large_inertial/gt/pointcloud_map" />
+<!-- 地址没写对，会导致节点崩溃,下面节点也需要读参数文件 -->
+<param name="metadata_file" value="/home/scy/autoware_map_output/large_inertial/gt_resolution_200/pointcloud_map_metadata.yaml" />
+<param name="tile_map_dir" value="/home/scy/autoware_map_output/large_inertial/gt_resolution_200/pointcloud_map" />
 
 <param name="globalmap_pcd" value="/media/scy/新加卷/数据集/Large-Scale-LiDAR-Inertial Dataset/seq06/map_myself/03-10.pcd" />
       <param name="convert_utm_to_local" value="true" />
-      <param name="downsample_resolution" value="0.4" />
+      <param name="downsample_resolution" value="0.2" />
     </node>
 
     <!-- hdl_localization_nodelet -->
     <node pkg="nodelet" type="nodelet" name="hdl_localization_nodelet" args="load hdl_localization/HdlLocalizationNodelet $(arg nodelet_manager)">
-      <param name="metadata_file" value="/home/scy/autoware_map_output/large_inertial/gt/pointcloud_map_metadata.yaml" />
+      <param name="metadata_file" value="/home/scy/autoware_map_output/large_inertial/gt_resolution_200/pointcloud_map_metadata.yaml" />
       <param name="tile_radius" value="1" />   <!-- 1=3x3, 2=5x5 -->
 
       <remap from="/velodyne_points" to="$(arg points_topic)" />
@@ -101,6 +101,10 @@
     <!-- ======== 时间戳偏移，雷达减去imu时间戳得到补偿时间戳 ======== -->
     <!-- t_lidar_corrected = t_lidar - time_offset_lidar_to_imu; -->
     <param name="time_offset_lidar_to_imu" value="0.012634" />
+
+    <param name="tile_update_min_dist" value="2.0" />
+    <param name="tile_hysteresis_count" value="5" />
+
     
       <!-- if "specify_init_pose" is true, pose estimator will be initialized with the following params -->
       <!-- otherwise, you need to input an initial pose with "2D Pose Estimate" on rviz" -->

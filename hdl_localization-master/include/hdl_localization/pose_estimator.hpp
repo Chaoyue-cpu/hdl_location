@@ -27,7 +27,7 @@ class OdomSystem;
 class PoseEstimator {
 public:
   using PointT = pcl::PointXYZI;
-  void set_registration(const pcl::Registration<PointT, PointT>::Ptr& reg) { registration = reg; }
+  using RegPtr = pcl::Registration<PointT, PointT>::Ptr;
 
   /**
    * @brief constructor
@@ -52,6 +52,10 @@ public:
    * @param gyro     angular velocity
    */
   void predict(const ros::Time& stamp, const Eigen::Vector3f& acc, const Eigen::Vector3f& gyro);
+
+  pcl::Registration<PoseEstimator::PointT, PoseEstimator::PointT>::Ptr getRegistration() const;
+
+  void set_registration(const pcl::Registration<PointT, PointT>::Ptr& reg);
 
   /**
    * @brief update the state of the odomety-based pose estimation
@@ -102,6 +106,7 @@ private:
   boost::optional<Eigen::Matrix4f> imu_odom_pred_error;
 
   pcl::Registration<PointT, PointT>::Ptr registration;
+  mutable std::mutex reg_mtx_;
 };
 
 }  // namespace hdl_localization

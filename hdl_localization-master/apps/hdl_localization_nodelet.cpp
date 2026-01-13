@@ -117,6 +117,8 @@ public:
     }
 
     NODELET_INFO_STREAM("Tile metadata loaded: " << tile_map.size());
+    tile_update_min_dist_ = private_nh.param<double>("tile_update_min_dist", 0.5);  // meters
+    tile_hysteresis_count_ = private_nh.param<int>("tile_hysteresis_count", 3);
 
     // IMU_to_Base_link
 
@@ -274,11 +276,15 @@ private:
       std::cout << "registration: FAST_GICP" << std::endl;
 
       fast_gicp::FastGICP<PointT, PointT>::Ptr fast_gicp(new fast_gicp::FastGICP<PointT, PointT>());
-      fast_gicp->setNumThreads(8);                   // 可配置参数
-      fast_gicp->setTransformationEpsilon(0.0001);   // 若两次估计间差异小于0.0001，则认为已收敛
-      fast_gicp->setMaximumIterations(64);           // 最大迭代次数
-      fast_gicp->setMaxCorrespondenceDistance(2.5);  // 最大搜索半径
-      fast_gicp->setCorrespondenceRandomness(20);    // 每个点求局部协方差时的最近邻个数,k 越大，局部面特征估计更稳定, 一般5~20
+      fast_gicp->setNumThreads(8);  // 可配置参数,给工程实现可以设置一个，论文可设置一个
+      // fast_gicp->setTransformationEpsilon(0.0001);   // 若两次估计间差异小于0.0001，则认为已收敛
+      fast_gicp->setTransformationEpsilon(0.001);
+      fast_gicp->setMaximumIterations(64);  // 最大迭代次数
+      // fast_gicp->setMaxCorrespondenceDistance(2.5);  // 最大搜索半径
+      fast_gicp->setMaxCorrespondenceDistance(2.0);  // 最大搜索半径
+
+      fast_gicp->setCorrespondenceRandomness(20);  // 每个点求局部协方差时的最近邻个数,k 越大，局部面特征估计更稳定, 一般5~20
+      // fast_gicp->setCorrespondenceRandomness(10);
       // fast_gicp->setMaximumOptimizerIterations(20);//fast_gicp比普通gicp快一个数量级
       return fast_gicp;
     } else if (reg_method == "FAST_VGICP") {
@@ -378,31 +384,15 @@ private:
    * @param points_msg
    */
   void points_callback(const sensor_msgs::PointCloud2ConstPtr& points_msg) {
-    {
-      std::unique_lock<std::mutex> lock(map_mutex);
-
-      if (has_staging_map) {
-        // 检查指针是否为null和空
-        if (!staging_map || staging_map->empty()) {
-          NODELET_WARN("staging_map is null");
-          return;
-        }
-        active_map.swap(staging_map);
-        has_staging_map = false;
-        if (!active_map || active_map->empty()) {
-          NODELET_WARN("No active map yet, skip frame.");
-          return;
-        }
-
-        // 要确保 scan thread 不在注册过程中使用旧 target
-        // ========== setInputTarget（如果你每帧都在调） ==========
-        auto t_target_start = std::chrono::steady_clock::now();
-        registration->setInputTarget(active_map);
-        ROS_INFO("Active map updated.");
-        auto t_target_end = std::chrono::steady_clock::now();
-        double target_time_ms = std::chrono::duration<double, std::milli>(t_target_end - t_target_start).count();
-
-        std::cout << "[GICP] target time: " << target_time_ms << " ms, pts: " << std::endl;
+    if (has_prepared_.load(std::memory_order_acquire)) {
+      pcl::Registration<PointT, PointT>::Ptr reg;
+      {
+        std::lock_guard<std::mutex> lk(prepared_mutex_);
+        reg = prepared_reg_;  // 拿到 shared_ptr 副本
+        has_prepared_.store(false, std::memory_order_release);
+      }
+      if (reg && pose_estimator) {
+        pose_estimator->set_registration(reg);  // 内部只短暂锁一下
       }
     }
 
@@ -519,6 +509,8 @@ private:
     }
 
     // correct
+    // auto aligned = pose_estimator->correct(stamp, filtered);
+
     auto aligned = pose_estimator->correct(stamp, filtered);
 
     if (aligned_pub.getNumSubscribers()) {
@@ -535,14 +527,67 @@ private:
   }
 
   void updateDynamicTiles(const Eigen::Vector3f& position) {
-    // NODELET_INFO("updateDynamicTiles - Position: (%.3f, %.3f, %.3f)", position.x(), position.y(), position.z());
+    if (tile_map.empty()) return;
 
-    // 1. 计算需要的瓦片
-    std::vector<std::string> need_tiles = computeRequiredTiles(position);
-    // 2. 如果瓦片集合发生变化，发布请求
-    if (need_tiles != last_tiles) {
+    // ----------- (A) 距离门控：没走够距离就不考虑换tiles -----------
+    if (!last_tile_eval_pos_inited_) {
+      last_tile_eval_pos_ = position;
+      last_tile_eval_pos_inited_ = true;
+      // 第一次允许直接评估一次（否则启动时可能不请求）
+    } else {
+      const double moved = (position - last_tile_eval_pos_).norm();
+      if (moved < tile_update_min_dist_) {
+        return;  // 走得不够远：不算、不比、不发
+      }
+      // 走够了：更新评估基准点
+      last_tile_eval_pos_ = position;
+    }
+
+    // ----------- (B) 计算“当前观测”所在格子的左下角原点（整数、负数正确）-----------
+    // 注意：必须用 floor(double)，负数 tile 才正确落到 [-200, -100] 这类网格
+    const int ix = static_cast<int>(std::floor(position.x() / x_res));
+    const int iy = static_cast<int>(std::floor(position.y() / y_res));
+    const int x_res_i = static_cast<int>(std::lround(x_res));
+    const int y_res_i = static_cast<int>(std::lround(y_res));
+
+    const int raw_origin_x = ix * x_res_i;
+    const int raw_origin_y = iy * y_res_i;
+
+    // ----------- (C) 原点滞回：连续 N 次判定到新原点才切换 -----------
+    if (!tile_origin_inited_) {
+      tile_origin_inited_ = true;
+      stable_origin_x_ = raw_origin_x;
+      stable_origin_y_ = raw_origin_y;
+      cand_origin_x_ = raw_origin_x;
+      cand_origin_y_ = raw_origin_y;
+      cand_count_ = 0;
+    } else {
+      if (raw_origin_x == stable_origin_x_ && raw_origin_y == stable_origin_y_) {
+        cand_count_ = 0;  // 仍在稳定原点
+      } else {
+        // 进入候选原点
+        if (raw_origin_x == cand_origin_x_ && raw_origin_y == cand_origin_y_) {
+          cand_count_++;
+        } else {
+          cand_origin_x_ = raw_origin_x;
+          cand_origin_y_ = raw_origin_y;
+          cand_count_ = 1;
+        }
+
+        if (cand_count_ >= tile_hysteresis_count_) {
+          stable_origin_x_ = cand_origin_x_;
+          stable_origin_y_ = cand_origin_y_;
+          cand_count_ = 0;
+        }
+      }
+    }
+
+    // ----------- (D) 基于“稳定原点”算 tiles，并 sort 后再比 -----------
+    std::vector<std::string> need_tiles = computeRequiredTilesByOrigin(stable_origin_x_, stable_origin_y_);
+
+    if (need_tiles != last_tiles_sorted_) {
       publishTileRequest(need_tiles);
-      last_tiles = need_tiles;
+      last_tiles_sorted_ = need_tiles;
       NODELET_INFO("Number of tiles needed: %zu", need_tiles.size());
     }
   }
@@ -552,34 +597,32 @@ private:
    * @param position 当前位置 (x, y, z)
    * @return 需要加载的瓦片文件名列表
    */
-  std::vector<std::string> computeRequiredTiles(const Eigen::Vector3f& position) {
-    // 计算当前坐标所在的瓦片网格
-    int current_tile_x = floor(position.x() / x_res) * x_res;  // 例如: 123.4 → 100
-    int current_tile_y = floor(position.y() / y_res) * y_res;  // 例如: -178.9 → -200
-    // NODELET_INFO("Current tile grid: (%d, %d)", current_tile_x, current_tile_y);
+  std::vector<std::string> computeRequiredTilesByOrigin(int origin_x, int origin_y) {
+    const int x_res_i = static_cast<int>(std::lround(x_res));
+    const int y_res_i = static_cast<int>(std::lround(y_res));
 
     std::vector<std::string> need_tiles;
+    need_tiles.reserve((2 * tile_radius + 1) * (2 * tile_radius + 1));
 
-    // 遍历周围瓦片区域
     for (int dx = -tile_radius; dx <= tile_radius; dx++) {
       for (int dy = -tile_radius; dy <= tile_radius; dy++) {
-        // 目标瓦片的左下角坐标
-        float target_x = current_tile_x + dx * x_res;
-        float target_y = current_tile_y + dy * y_res;
+        const int target_x = origin_x + dx * x_res_i;
+        const int target_y = origin_y + dy * y_res_i;
 
-        // NODELET_INFO("  Checking tile at: (%.1f, %.1f)", target_x, target_y);
-
-        // 查找匹配的瓦片
+        // tile_map 只有 30 行：全扫足够
         for (auto& kv : tile_map) {
-          auto origin = kv.second;
-          if (fabs(origin.x() - target_x) < 1 && fabs(origin.y() - target_y) < 1) {
-            need_tiles.push_back(kv.first);  // 文件名压入
-            break;                           // 找到就跳出内层循环
+          const int ox = static_cast<int>(kv.second.x());
+          const int oy = static_cast<int>(kv.second.y());
+          if (ox == target_x && oy == target_y) {
+            need_tiles.push_back(kv.first);
+            break;
           }
         }
       }
     }
 
+    // 要求1：每次 sort 后再比
+    std::sort(need_tiles.begin(), need_tiles.end());
     return need_tiles;
   }
 
@@ -656,14 +699,24 @@ private:
       return;
     }
 
+    // 1) 创建新的 registration
+    auto reg = create_registration();
+
+    // 2) 预热：在地图线程完成 setInputTarget（慢没关系）
+    auto t0 = std::chrono::steady_clock::now();
+    reg->setInputTarget(new_map);
+    auto t1 = std::chrono::steady_clock::now();
+    std::cout << "[PREHEAT] setTarget ms=" << std::chrono::duration<double, std::milli>(t1 - t0).count() << ", pts=" << new_map->size() << std::endl;
+
+    // 3) 放到 prepared 槽位（覆盖旧的 prepared，不会累积）
     {
-      std::lock_guard<std::mutex> lock(map_mutex);
-      staging_map = new_map;
-      has_staging_map = true;
-      map_ready = false;
+      std::lock_guard<std::mutex> lk(prepared_mutex_);
+      prepared_reg_ = reg;
+      prepared_map_ = new_map;
+      has_prepared_.store(true, std::memory_order_release);
     }
 
-    NODELET_INFO_STREAM("Global map updated, points=" << staging_map->size());
+    // NODELET_INFO_STREAM("Global map updated, points=" << ->size());
 
     // 函数结束，lock_guard离开作用域，自动解锁！
   }
@@ -825,8 +878,9 @@ private:
     ScanMatchingStatus status;
     status.header = header;
 
-    // 配准是否收敛
-    status.has_converged = registration->hasConverged();
+    auto reg = pose_estimator->getRegistration();
+
+    status.has_converged = reg->hasConverged();
     status.matching_error = 0.0;
 
     // 获取私有参数（可在launch文件或yaml中配置）
@@ -849,7 +903,7 @@ private:
       num_valid_points++;
 
       // 搜索目标点云中与当前点最近的一个点
-      registration->getSearchMethodTarget()->nearestKSearch(pt, 1, k_indices, k_sq_dists);
+      reg->getSearchMethodTarget()->nearestKSearch(pt, 1, k_indices, k_sq_dists);
 
       // 若最近邻距离在阈值内，视为内点，累计误差
       if (k_sq_dists[0] < max_correspondence_dist * max_correspondence_dist) {
@@ -865,7 +919,7 @@ private:
     status.inlier_fraction = static_cast<float>(num_inliers) / std::max(1, num_valid_points);
 
     // 最终的位姿变换（配准结果）
-    status.relative_pose = tf2::eigenToTransform(Eigen::Isometry3d(registration->getFinalTransformation().cast<double>())).transform;
+    status.relative_pose = tf2::eigenToTransform(Eigen::Isometry3d(reg->getFinalTransformation().cast<double>())).transform;
 
     // 预测误差标签与值
     status.prediction_labels.reserve(2);
@@ -960,7 +1014,7 @@ private:
 
   // 动态地图
   std::map<std::string, Eigen::Vector2f> tile_map;
-  std::mutex map_mutex;
+
   pcl::PointCloud<PointT>::Ptr current_map{nullptr};  // 主线程读
   pcl::PointCloud<PointT>::Ptr pending_map{nullptr};  // 地图线程写
 
@@ -977,14 +1031,13 @@ private:
   std::thread map_thread_;
   ros::CallbackQueue map_queue_;   // 专用 callback queue
   ros::Subscriber globalmap_sub_;  // 地图订阅（在独立线程中）
-  std::mutex map_mutex_;           // 用于 registration 替换
-  bool map_ready = false;
+  std::mutex reg_mutex_;
 
-  pcl::PointCloud<PointT>::Ptr active_map;   // 当前定位用地图
-  pcl::PointCloud<PointT>::Ptr staging_map;  // 缓存新地图
-  bool has_staging_map = false;
-  std::atomic<bool> map_switch_requested{false};  // 标记请求加载
-  std::mutex map_request_mutex;
+  std::mutex prepared_mutex_;
+  pcl::Registration<PointT, PointT>::Ptr prepared_reg_;
+  pcl::PointCloud<PointT>::Ptr prepared_map_;
+  std::atomic<bool> has_prepared_{false};
+
   // pcl::PointCloud<PointT>::Ptr globalmap{nullptr};
   std::set<std::string> loaded_tiles;
 
@@ -993,6 +1046,28 @@ private:
 
   // --- 新增：地图线程中使用的临时 registration ---
   std::shared_ptr<pcl::Registration<PointT, PointT>> updating_registration_;
+
+  // ---- tiles 更新：距离门控 + 原点滞回 + sort compare ----
+  double tile_update_min_dist_;  // 走够这么多米，才考虑更新tiles（可配）
+  int tile_hysteresis_count_;    // 原点滞回：连续多少次判定到新原点才切换（可配）
+
+  bool tile_origin_inited_ = false;
+
+  // 稳定采用的tile左下角原点（与你yaml一致的整数原点）
+  int stable_origin_x_ = 0;
+  int stable_origin_y_ = 0;
+
+  // 候选原点（用于滞回确认）
+  int cand_origin_x_ = 0;
+  int cand_origin_y_ = 0;
+  int cand_count_ = 0;
+
+  // 距离门控：上次“允许评估tiles更新”的位置
+  Eigen::Vector3f last_tile_eval_pos_ = Eigen::Vector3f::Zero();
+  bool last_tile_eval_pos_inited_ = false;
+
+  // last_tiles 必须保存“排序后”的版本
+  std::vector<std::string> last_tiles_sorted_;
 };
 }  // namespace hdl_localization
 

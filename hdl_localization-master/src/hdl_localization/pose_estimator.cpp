@@ -93,6 +93,20 @@ PoseEstimator::PoseEstimator(pcl::Registration<PointT, PointT>::Ptr& registratio
 
 PoseEstimator::~PoseEstimator() {}
 
+void PoseEstimator::set_registration(const pcl::Registration<PointT, PointT>::Ptr& reg) {
+  std::lock_guard<std::mutex> lk(reg_mtx_);
+  registration = reg;  // O(1) 指针交换
+}
+pcl::Registration<PoseEstimator::PointT, PoseEstimator::PointT>::Ptr PoseEstimator::getRegistration() const {
+  std::lock_guard<std::mutex> lk(reg_mtx_);
+  return registration;  // 返回 shared_ptr 副本（O(1)）
+}
+
+static double now_thread_cpu_ms() {
+  timespec ts;
+  clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+  return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
+}
 /**
  * @brief predict
  * @param stamp    timestamp
@@ -208,6 +222,13 @@ void PoseEstimator::predict_odom(const Eigen::Matrix4f& odom_delta) {
  */
 // 使用当前点云观测对UKF进行修正，并返回配准后的点云
 pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Time& stamp, const pcl::PointCloud<PointT>::ConstPtr& cloud) {
+  pcl::Registration<PointT, PointT>::Ptr reg;
+  {
+    std::lock_guard<std::mutex> lk(reg_mtx_);
+    reg = registration;  // 只锁这一下，极短
+  }
+  // 后面 reg->align() 不要再锁
+
   // 如果这是第一次调用，则设置初始时间戳
   if (init_stamp.is_zero()) {
     init_stamp = stamp;
@@ -269,22 +290,25 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   // 配准对齐点云 cloud 到地图坐标系，使用 init_guess 作为初始估计
   pcl::PointCloud<PointT>::Ptr aligned(new pcl::PointCloud<PointT>());
   // 当前帧雷达点云
-  registration->setInputSource(cloud);
+  reg->setInputSource(cloud);
   // ====== 开始计时 ======
-  auto t_start = std::chrono::steady_clock::now();
+  // auto t0w = std::chrono::steady_clock::now();
+  // double t0c = now_thread_cpu_ms();
 
-  registration->align(*aligned, init_guess);
+  reg->align(*aligned, init_guess);
 
   // ====== 结束计时 ======
-  auto t_end = std::chrono::steady_clock::now();
+  // auto t1w = std::chrono::steady_clock::now();
+  // double t1c = now_thread_cpu_ms();
 
-  // 计算耗时（毫秒）
-  double align_time_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
-
-  std::cout << "[GICP] align time: " << align_time_ms << " ms" << std::endl;
+  // double wall = std::chrono::duration<double, std::milli>(t1w - t0w).count();
+  // double cpu = t1c - t0c;
+  // std::cout << "[GICP] wall=" << wall << " ms, cpu=" << cpu << " ms\n";
+  // // solver.iterations()
+  // std::cout << "cloud_size=" << cloud->size() << " conv=" << reg->hasConverged() << std::endl;
 
   // 提取最终变换矩阵
-  Eigen::Matrix4f trans = registration->getFinalTransformation();
+  Eigen::Matrix4f trans = reg->getFinalTransformation();
   // std::cout << "[TRANSFORM] Current frame pose:" << std::endl;
   // std::cout << trans << std::endl;
 
@@ -305,13 +329,13 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   last_observation = trans;
 
   // 记录预测误差：无预测时的误差,registration->getFinalTransformation()就是trans
-  wo_pred_error = no_guess.inverse() * registration->getFinalTransformation();
+  wo_pred_error = no_guess.inverse() * reg->getFinalTransformation();
 
   // 执行UKF状态更新（修正）
   ukf->correct(observation);
 
   // 记录IMU预测误差
-  imu_pred_error = imu_guess.inverse() * registration->getFinalTransformation();
+  imu_pred_error = imu_guess.inverse() * reg->getFinalTransformation();
 
   // 如果有odom_ukf，进行里程计UKF的修正
   if (odom_ukf) {
@@ -324,9 +348,9 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
     odom_ukf->correct(observation);
 
     // 记录里程计预测误差
-    odom_pred_error = odom_guess.inverse() * registration->getFinalTransformation();
+    odom_pred_error = odom_guess.inverse() * reg->getFinalTransformation();
     // 记录融合误差
-    imu_odom_pred_error = init_guess.inverse() * registration->getFinalTransformation();
+    imu_odom_pred_error = init_guess.inverse() * reg->getFinalTransformation();
   }
 
   // 返回配准后的点云
