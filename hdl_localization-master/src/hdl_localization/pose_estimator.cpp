@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <cmath>
 #include <limits>
+#include <unordered_set>
 
 #include <pcl/filters/voxel_grid.h>
 #include <pclomp/ndt_omp.h>
@@ -14,6 +16,30 @@
 #include <kkl/alg/unscented_kalman_filter.hpp>
 
 namespace hdl_localization {
+
+namespace {
+struct VoxelKey {
+  int x;
+  int y;
+  int z;
+
+  bool operator==(const VoxelKey& other) const { return x == other.x && y == other.y && z == other.z; }
+};
+
+struct VoxelKeyHash {
+  std::size_t operator()(const VoxelKey& key) const {
+    std::size_t hx = static_cast<std::size_t>(std::hash<int>{}(key.x));
+    std::size_t hy = static_cast<std::size_t>(std::hash<int>{}(key.y));
+    std::size_t hz = static_cast<std::size_t>(std::hash<int>{}(key.z));
+    return hx ^ (hy << 1) ^ (hz << 2);
+  }
+};
+
+VoxelKey to_voxel_key(const Eigen::Vector3f& p, double voxel_size) {
+  const float inv = 1.0f / static_cast<float>(voxel_size);
+  return VoxelKey{static_cast<int>(std::floor(p.x() * inv)), static_cast<int>(std::floor(p.y() * inv)), static_cast<int>(std::floor(p.z() * inv))};
+}
+}  // namespace
 
 /**
  * @brief constructor
@@ -40,7 +66,16 @@ PoseEstimator::PoseEstimator(
   double ndt_score_good,
   double ndt_score_bad,
   double ndt_score_min_confidence,
-  double f2f_score_confidence_gain)
+  double f2f_score_confidence_gain,
+  bool enable_f2f_confidence_filter,
+  bool enable_f2f_dynamic_filter,
+  double f2f_wall_y_threshold,
+  double f2f_wall_z_min,
+  double f2f_wall_z_max,
+  double f2f_wall_keep_ratio,
+  double f2f_dynamic_voxel_size,
+  double f2f_dynamic_keep_ratio,
+  int f2f_min_filtered_points)
 : registration(registration),
   cool_time_duration(cool_time_duration),
   enable_frame2frame_ndt(enable_frame2frame_ndt),
@@ -53,7 +88,18 @@ PoseEstimator::PoseEstimator(
   ndt_score_bad(ndt_score_bad),
   ndt_score_min_confidence(ndt_score_min_confidence),
   f2f_score_confidence_gain(std::max(0.0, f2f_score_confidence_gain)),
-  prev_map_pose(Eigen::Matrix4f::Identity()) {
+  enable_f2f_confidence_filter(enable_f2f_confidence_filter),
+  enable_f2f_dynamic_filter(enable_f2f_dynamic_filter),
+  f2f_wall_y_threshold(std::max(0.0, f2f_wall_y_threshold)),
+  f2f_wall_z_min(std::min(f2f_wall_z_min, f2f_wall_z_max)),
+  f2f_wall_z_max(std::max(f2f_wall_z_min, f2f_wall_z_max)),
+  f2f_wall_keep_ratio(std::max(0.0, std::min(1.0, f2f_wall_keep_ratio))),
+  f2f_dynamic_voxel_size(std::max(0.05, f2f_dynamic_voxel_size)),
+  f2f_dynamic_keep_ratio(std::max(0.0, std::min(1.0, f2f_dynamic_keep_ratio))),
+  f2f_min_filtered_points(std::max(50, f2f_min_filtered_points)),
+  prev_map_pose(Eigen::Matrix4f::Identity()),
+  pure_f2f_initialized(false),
+  pure_f2f_global_pose(Eigen::Matrix4f::Identity()) {
   // 初始化最后一次观测的变换矩阵（4x4单位矩阵）
   last_observation = Eigen::Matrix4f::Identity();
 
@@ -166,6 +212,34 @@ static double now_thread_cpu_ms() {
   return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
 }
 
+bool PoseEstimator::is_wall_point(const PointT& pt) const {
+  if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) {
+    return false;
+  }
+  return std::abs(pt.y) >= f2f_wall_y_threshold && pt.z >= f2f_wall_z_min && pt.z <= f2f_wall_z_max;
+}
+
+bool PoseEstimator::keep_point_by_ratio(const PointT& pt, double keep_ratio, int salt) const {
+  if (keep_ratio >= 1.0) {
+    return true;
+  }
+  if (keep_ratio <= 0.0) {
+    return false;
+  }
+
+  const int qx = static_cast<int>(std::lround(pt.x * 100.0f));
+  const int qy = static_cast<int>(std::lround(pt.y * 100.0f));
+  const int qz = static_cast<int>(std::lround(pt.z * 100.0f));
+
+  std::uint32_t h = 2166136261u;
+  h = (h ^ static_cast<std::uint32_t>(qx + 374761393 + salt * 17)) * 16777619u;
+  h = (h ^ static_cast<std::uint32_t>(qy + 668265263 + salt * 31)) * 16777619u;
+  h = (h ^ static_cast<std::uint32_t>(qz + 2246822519u + salt * 43)) * 16777619u;
+
+  const double u = static_cast<double>(h) / static_cast<double>(std::numeric_limits<std::uint32_t>::max());
+  return u <= keep_ratio;
+}
+
 bool PoseEstimator::compute_f2f_absolute_pose(
   const pcl::PointCloud<PointT>::ConstPtr& cloud,
   const Eigen::Matrix4f& init_guess,
@@ -175,14 +249,86 @@ bool PoseEstimator::compute_f2f_absolute_pose(
     return false;
   }
 
-  frame2frame_registration->setInputTarget(prev_cloud);
-  frame2frame_registration->setInputSource(cloud);
-
   const Eigen::Matrix4f init_rel = prev_map_pose.inverse() * init_guess;
   pcl::PointCloud<PointT> aligned;
-  frame2frame_registration->align(aligned, init_rel);
+  auto run_align = [&](const pcl::PointCloud<PointT>::ConstPtr& target, const pcl::PointCloud<PointT>::ConstPtr& source) {
+    frame2frame_registration->setInputTarget(target);
+    frame2frame_registration->setInputSource(source);
+    aligned.clear();
+    frame2frame_registration->align(aligned, init_rel);
+    return frame2frame_registration->hasConverged();
+  };
 
-  if (!frame2frame_registration->hasConverged()) {
+  bool converged = false;
+  if (enable_f2f_confidence_filter) {
+    pcl::PointCloud<PointT>::Ptr filtered_target(new pcl::PointCloud<PointT>());
+    pcl::PointCloud<PointT>::Ptr filtered_source(new pcl::PointCloud<PointT>());
+    filtered_target->reserve(prev_cloud->size());
+    filtered_source->reserve(cloud->size());
+
+    std::unordered_set<VoxelKey, VoxelKeyHash> target_voxels;
+    if (enable_f2f_dynamic_filter && f2f_dynamic_voxel_size > 0.0) {
+      target_voxels.reserve(prev_cloud->size());
+      for (const auto& pt : prev_cloud->points) {
+        if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) {
+          continue;
+        }
+        target_voxels.insert(to_voxel_key(Eigen::Vector3f(pt.x, pt.y, pt.z), f2f_dynamic_voxel_size));
+      }
+    }
+
+    for (std::size_t i = 0; i < prev_cloud->size(); ++i) {
+      const auto& pt = prev_cloud->points[i];
+      if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) {
+        continue;
+      }
+
+      const double keep_ratio = is_wall_point(pt) ? f2f_wall_keep_ratio : 1.0;
+      if (keep_point_by_ratio(pt, keep_ratio, static_cast<int>(i))) {
+        filtered_target->push_back(pt);
+      }
+    }
+
+    for (std::size_t i = 0; i < cloud->size(); ++i) {
+      const auto& pt = cloud->points[i];
+      if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) {
+        continue;
+      }
+
+      const bool wall_point = is_wall_point(pt);
+      bool dynamic_point = false;
+      if (enable_f2f_dynamic_filter && !target_voxels.empty()) {
+        const Eigen::Vector4f p_curr(pt.x, pt.y, pt.z, 1.0f);
+        const Eigen::Vector4f p_prev = init_rel * p_curr;
+        const VoxelKey key = to_voxel_key(p_prev.head<3>(), f2f_dynamic_voxel_size);
+        dynamic_point = target_voxels.find(key) == target_voxels.end();
+      }
+
+      double keep_ratio = 1.0;
+      if (wall_point) {
+        keep_ratio *= f2f_wall_keep_ratio;
+      }
+      if (dynamic_point) {
+        keep_ratio *= f2f_dynamic_keep_ratio;
+      }
+
+      if (keep_point_by_ratio(pt, keep_ratio, static_cast<int>(i) + 1337)) {
+        filtered_source->push_back(pt);
+      }
+    }
+
+    const bool enough_filtered_points =
+      filtered_target->size() >= static_cast<std::size_t>(f2f_min_filtered_points) && filtered_source->size() >= static_cast<std::size_t>(f2f_min_filtered_points);
+    if (enough_filtered_points) {
+      converged = run_align(filtered_target, filtered_source);
+    }
+  }
+
+  if (!converged) {
+    converged = run_align(prev_cloud, cloud);
+  }
+
+  if (!converged) {
     return false;
   }
 
@@ -453,6 +599,29 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   if (has_f2f_pose) {
     fused_pose = fuse_map_and_f2f_pose(map_pose, f2f_pose, map_fitness_score, f2f_fitness_score);
   }
+
+  bool pure_f2f_anchor_frame = false;
+  bool pure_f2f_step_converged = false;
+  double pure_f2f_step_score = std::numeric_limits<double>::quiet_NaN();
+  bool pure_f2f_available = false;
+  if (!pure_f2f_initialized) {
+    // Anchor only once with the first global pose, then keep chaining frame-to-frame only.
+    pure_f2f_global_pose = map_pose;
+    pure_f2f_initialized = true;
+    pure_f2f_anchor_frame = true;
+    pure_f2f_available = true;
+  } else if (frame2frame_registration && prev_cloud) {
+    pcl::PointCloud<PointT> pure_f2f_aligned;
+    frame2frame_registration->setInputTarget(prev_cloud);
+    frame2frame_registration->setInputSource(cloud);
+    frame2frame_registration->align(pure_f2f_aligned, Eigen::Matrix4f::Identity());
+    pure_f2f_step_converged = frame2frame_registration->hasConverged();
+    if (pure_f2f_step_converged) {
+      pure_f2f_global_pose = pure_f2f_global_pose * frame2frame_registration->getFinalTransformation();
+      pure_f2f_step_score = frame2frame_registration->getFitnessScore();
+    }
+    pure_f2f_available = true;
+  }
   // std::cout << "[TRANSFORM] Current frame pose:" << std::endl;
   // std::cout << trans << std::endl;
 
@@ -468,6 +637,30 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
     "[GICP] fused pose p=[" << p.x() << ", " << p.y() << ", " << p.z() << "] "
                             << "q=[w " << q.w() << ", x " << q.x() << ", y " << q.y() << ", z " << q.z() << "] "
                             << "f2f_used=" << (has_f2f_pose ? "true" : "false") << " map_score=" << map_fitness_score << " f2f_score=" << f2f_fitness_score);
+
+  if (pure_f2f_available) {
+    const Eigen::Vector3f p_pure_f2f = pure_f2f_global_pose.block<3, 1>(0, 3);
+    const Eigen::Quaternionf q_pure_f2f(pure_f2f_global_pose.block<3, 3>(0, 0));
+
+    const Eigen::Matrix4f pure_f2f_to_fused = pure_f2f_global_pose.inverse() * fused_pose;
+    const Eigen::Vector3f delta_t = pure_f2f_to_fused.block<3, 1>(0, 3);
+    const double delta_t_norm = delta_t.norm();
+    Eigen::Quaternionf delta_q(pure_f2f_to_fused.block<3, 3>(0, 0));
+    delta_q.normalize();
+    const double delta_angle_rad = 2.0 * std::acos(std::max(-1.0, std::min(1.0, static_cast<double>(std::abs(delta_q.w())))));
+    const double delta_angle_deg = delta_angle_rad * 57.29577951308232;
+
+    ROS_INFO_STREAM(
+      "[POSE_COMPARE] pure_f2f_global p=[" << p_pure_f2f.x() << ", " << p_pure_f2f.y() << ", " << p_pure_f2f.z() << "] "
+                                           << "q=[w " << q_pure_f2f.w() << ", x " << q_pure_f2f.x() << ", y " << q_pure_f2f.y() << ", z " << q_pure_f2f.z() << "] "
+                                           << "anchor_frame=" << (pure_f2f_anchor_frame ? "true" : "false") << " step_converged=" << (pure_f2f_step_converged ? "true" : "false")
+                                           << " step_score=" << pure_f2f_step_score << " "
+                                           << "vs fused: delta_t=[" << delta_t.x() << ", " << delta_t.y() << ", " << delta_t.z() << "] "
+                                           << "|delta_t|=" << delta_t_norm << "m"
+                                           << " delta_rot=" << delta_angle_deg << "deg");
+  } else {
+    ROS_INFO_STREAM("[POSE_COMPARE] pure_f2f_global unavailable in this frame, compare skipped");
+  }
 
   // 构造观测向量 observation（位置+四元数，共7维）,已 修正四元数正负
   Eigen::VectorXf observation(7);

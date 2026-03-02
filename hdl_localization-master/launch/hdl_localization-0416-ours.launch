@@ -15,7 +15,7 @@
   <arg name="invert_imu_gyro" default="false" />
   <arg name="use_global_localization" default="false" />
   <arg name="imu_topic" default="/localization/imu" />
-  <arg name="enable_frame2frame_ndt" default="true" />
+  <arg name="enable_frame2frame_ndt" default="false" />
   <!-- NDT_OMP -->
   <arg name="frame2frame_reg_method" default="FAST_GICP" />
   <arg name="enable_score_weighted_fusion" default="true" />
@@ -94,10 +94,21 @@
       <param name="frame_to_frame_reg_num_threads" value="6" />
       <param name="frame2frame_reg_method" value="$(arg frame2frame_reg_method)" />
       <param name="enable_score_weighted_fusion" value="$(arg enable_score_weighted_fusion)" />
-      <param name="ndt_score_good" value="0.15" />
-      <param name="ndt_score_bad" value="1.5" />
+      <!-- 表示分数控制加权，越小加权越高 -->
+      <param name="ndt_score_good" value="0.30" />
+      <param name="ndt_score_bad" value="3.0" />
       <param name="ndt_score_min_confidence" value="0.05" />
       <param name="f2f_score_confidence_gain" value="$(arg f2f_score_confidence_gain)" />
+      <!-- lightweight f2f confidence filtering (default off) -->
+      <param name="enable_f2f_confidence_filter" value="false" />
+      <param name="enable_f2f_dynamic_filter" value="false" />
+      <param name="f2f_wall_y_threshold" value="3.0" />
+      <param name="f2f_wall_z_min" value="0.2" />
+      <param name="f2f_wall_z_max" value="3.0" />
+      <param name="f2f_wall_keep_ratio" value="0.4" />
+      <param name="f2f_dynamic_voxel_size" value="0.5" />
+      <param name="f2f_dynamic_keep_ratio" value="0.25" />
+      <param name="f2f_min_filtered_points" value="1000" />
       <!-- <param name="ndt_neighbor_search_radius" value="1.0" />
       <param name="ndt_resolution" value="0.6" /> -->
       <!-- 初始0.1，会有个别帧索引溢出的问题 -->
@@ -118,21 +129,21 @@
       <!--gt地图初始位姿  -->
     <param name="specify_init_pose" value="true" />
     <!-- 605s -->
-      <param name="init_pos_x" value="1472.937134" />
+      <!-- <param name="init_pos_x" value="1472.937134" />
       <param name="init_pos_y" value="-119.442673" />
       <param name="init_pos_z" value="-50.079445" />
       <param name="init_ori_w" value="0.015251" />
       <param name="init_ori_x" value="-0.026834" />
       <param name="init_ori_y" value="0.155982" />
-      <param name="init_ori_z" value="-0.987278" />
-<!-- 693s -->
-      <!-- <param name="init_pos_x" value="1100.937134" />
-      <param name="init_pos_y" value="-132.442673" />
-      <param name="init_pos_z" value="-35.079445" />
-      <param name="init_ori_w" value="0.015251" />
-      <param name="init_ori_x" value="-0.026834" />
-      <param name="init_ori_y" value="0.155982" />
       <param name="init_ori_z" value="-0.987278" /> -->
+<!-- 693s -->
+      <param name="init_pos_x" value="1244.937134" />
+      <param name="init_pos_y" value="-127.442673" />
+      <param name="init_pos_z" value="-40.079445" />
+      <param name="init_ori_w" value="0.022545" />
+      <param name="init_ori_x" value="-0.016711" />
+      <param name="init_ori_y" value="0.133589" />
+      <param name="init_ori_z" value="-0.990639" />
 
       <!-- 837s -->
       <!-- <param name="init_pos_x" value="1100.937134" />

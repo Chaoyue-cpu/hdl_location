@@ -405,7 +405,16 @@ private:
         private_nh.param<double>("ndt_score_good", 0.15),
         private_nh.param<double>("ndt_score_bad", 1.5),
         private_nh.param<double>("ndt_score_min_confidence", 0.05),
-        private_nh.param<double>("f2f_score_confidence_gain", 1.0)));
+        private_nh.param<double>("f2f_score_confidence_gain", 1.0),
+        private_nh.param<bool>("enable_f2f_confidence_filter", false),
+        private_nh.param<bool>("enable_f2f_dynamic_filter", false),
+        private_nh.param<double>("f2f_wall_y_threshold", 3.0),
+        private_nh.param<double>("f2f_wall_z_min", -2.0),
+        private_nh.param<double>("f2f_wall_z_max", 3.0),
+        private_nh.param<double>("f2f_wall_keep_ratio", 0.25),
+        private_nh.param<double>("f2f_dynamic_voxel_size", 0.5),
+        private_nh.param<double>("f2f_dynamic_keep_ratio", 0.25),
+        private_nh.param<int>("f2f_min_filtered_points", 600)));
     }
   }
 
@@ -818,7 +827,16 @@ private:
       private_nh.param<double>("ndt_score_good", 0.15),
       private_nh.param<double>("ndt_score_bad", 1.5),
       private_nh.param<double>("ndt_score_min_confidence", 0.05),
-      private_nh.param<double>("f2f_score_confidence_gain", 1.0)));
+      private_nh.param<double>("f2f_score_confidence_gain", 1.0),
+      private_nh.param<bool>("enable_f2f_confidence_filter", false),
+      private_nh.param<bool>("enable_f2f_dynamic_filter", false),
+      private_nh.param<double>("f2f_wall_y_threshold", 3.0),
+      private_nh.param<double>("f2f_wall_z_min", -2.0),
+      private_nh.param<double>("f2f_wall_z_max", 3.0),
+      private_nh.param<double>("f2f_wall_keep_ratio", 0.25),
+      private_nh.param<double>("f2f_dynamic_voxel_size", 0.5),
+      private_nh.param<double>("f2f_dynamic_keep_ratio", 0.25),
+      private_nh.param<int>("f2f_min_filtered_points", 600)));
 
     relocalizing = false;
 
@@ -847,7 +865,16 @@ private:
       private_nh.param<double>("ndt_score_good", 0.15),
       private_nh.param<double>("ndt_score_bad", 1.5),
       private_nh.param<double>("ndt_score_min_confidence", 0.05),
-      private_nh.param<double>("f2f_score_confidence_gain", 1.0)));
+      private_nh.param<double>("f2f_score_confidence_gain", 1.0),
+      private_nh.param<bool>("enable_f2f_confidence_filter", false),
+      private_nh.param<bool>("enable_f2f_dynamic_filter", false),
+      private_nh.param<double>("f2f_wall_y_threshold", 3.0),
+      private_nh.param<double>("f2f_wall_z_min", -2.0),
+      private_nh.param<double>("f2f_wall_z_max", 3.0),
+      private_nh.param<double>("f2f_wall_keep_ratio", 0.25),
+      private_nh.param<double>("f2f_dynamic_voxel_size", 0.5),
+      private_nh.param<double>("f2f_dynamic_keep_ratio", 0.25),
+      private_nh.param<int>("f2f_min_filtered_points", 600)));
   }
 
   /**

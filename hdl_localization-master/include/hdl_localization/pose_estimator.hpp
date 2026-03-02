@@ -52,7 +52,16 @@ public:
     double ndt_score_good = 0.15,
     double ndt_score_bad = 1.5,
     double ndt_score_min_confidence = 0.05,
-    double f2f_score_confidence_gain = 1.0);
+    double f2f_score_confidence_gain = 1.0,
+    bool enable_f2f_confidence_filter = false,
+    bool enable_f2f_dynamic_filter = false,
+    double f2f_wall_y_threshold = 3.0,
+    double f2f_wall_z_min = -2.0,
+    double f2f_wall_z_max = 3.0,
+    double f2f_wall_keep_ratio = 0.25,
+    double f2f_dynamic_voxel_size = 0.5,
+    double f2f_dynamic_keep_ratio = 0.25,
+    int f2f_min_filtered_points = 600);
   ~PoseEstimator();
 
   /**
@@ -103,6 +112,8 @@ public:
   const boost::optional<Eigen::Matrix4f>& imu_odom_prediction_error() const;
 
 private:
+  bool is_wall_point(const PointT& pt) const;
+  bool keep_point_by_ratio(const PointT& pt, double keep_ratio, int salt) const;
   bool compute_f2f_absolute_pose(const pcl::PointCloud<PointT>::ConstPtr& cloud, const Eigen::Matrix4f& init_guess, Eigen::Matrix4f* f2f_absolute_pose, double* f2f_fitness_score);
   Eigen::Matrix4f fuse_map_and_f2f_pose(const Eigen::Matrix4f& map_pose, const Eigen::Matrix4f& f2f_pose, double map_fitness_score, double f2f_fitness_score) const;
   double score_to_confidence(double score) const;
@@ -135,10 +146,21 @@ private:
   double ndt_score_bad;
   double ndt_score_min_confidence;
   double f2f_score_confidence_gain;
+  bool enable_f2f_confidence_filter;
+  bool enable_f2f_dynamic_filter;
+  double f2f_wall_y_threshold;
+  double f2f_wall_z_min;
+  double f2f_wall_z_max;
+  double f2f_wall_keep_ratio;
+  double f2f_dynamic_voxel_size;
+  double f2f_dynamic_keep_ratio;
+  int f2f_min_filtered_points;
 
   pcl::Registration<PointT, PointT>::Ptr frame2frame_registration;
   pcl::PointCloud<PointT>::ConstPtr prev_cloud;
   Eigen::Matrix4f prev_map_pose;
+  bool pure_f2f_initialized;
+  Eigen::Matrix4f pure_f2f_global_pose;
 
   pcl::Registration<PointT, PointT>::Ptr registration;
   mutable std::mutex reg_mtx_;
