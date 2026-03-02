@@ -57,6 +57,7 @@
 // 确保在 hdl_localization_nodelet.cpp 开头添加：
 #include <thread>  // 用于 std::thread
 #include <hdl_localization/TileRequest.h>
+#include <pcl/filters/crop_box.h>
 
 namespace hdl_localization {
 
@@ -104,7 +105,19 @@ public:
 
     std::string metadata_file = private_nh.param<std::string>("metadata_file", "/home/scy/autoware_map_output/pointcloud_map_metadata.yaml");
 
-    YAML::Node config = YAML::LoadFile(metadata_file);
+    std::ifstream metadata_ifs(metadata_file);
+    if (!metadata_ifs.good()) {
+      NODELET_FATAL_STREAM("metadata_file not found or unreadable: " << metadata_file);
+      return;
+    }
+
+    YAML::Node config;
+    try {
+      config = YAML::LoadFile(metadata_file);
+    } catch (const YAML::Exception& e) {
+      NODELET_FATAL_STREAM("failed to parse metadata_file: " << metadata_file << ", error: " << e.what());
+      return;
+    }
     x_res = config["x_resolution"].as<double>();
     y_res = config["y_resolution"].as<double>();
 
@@ -207,8 +220,13 @@ private:
       NODELET_INFO("NDT_OMP is selected");
       // 创建了一个指针，指向new的对象
       pclomp::NormalDistributionsTransform<PointT, PointT>::Ptr ndt(new pclomp::NormalDistributionsTransform<PointT, PointT>());
-      ndt->setTransformationEpsilon(0.01);
+      ndt->setTransformationEpsilon(0.001);
+      ndt->setNumThreads(6);
       ndt->setResolution(ndt_resolution);
+      // 测试对比用的参数，原没有
+      ndt->setTransformationEpsilon(0.001);
+      ndt->setMaximumIterations(64);  // 最大迭代次数
+
       if (ndt_neighbor_search_method == "DIRECT1") {
         NODELET_INFO("search_method DIRECT1 is selected");
         ndt->setNeighborhoodSearchMethod(pclomp::DIRECT1);
@@ -256,9 +274,11 @@ private:
       pcl::GeneralizedIterativeClosestPoint<PointT, PointT>::Ptr gicp(new pcl::GeneralizedIterativeClosestPoint<PointT, PointT>());
       gicp->setTransformationEpsilon(0.01);
       gicp->setMaximumIterations(64);
-      gicp->setMaxCorrespondenceDistance(2.5);
+      // gicp->setMaxCorrespondenceDistance(2.5);
+      gicp->setMaxCorrespondenceDistance(8.5);
+
       gicp->setCorrespondenceRandomness(20);
-      gicp->setMaximumOptimizerIterations(20);
+      gicp->setMaximumOptimizerIterations(128);
       return gicp;
     }
     // else if (reg_method == "GICP_OMP") {
@@ -276,7 +296,7 @@ private:
       std::cout << "registration: FAST_GICP" << std::endl;
 
       fast_gicp::FastGICP<PointT, PointT>::Ptr fast_gicp(new fast_gicp::FastGICP<PointT, PointT>());
-      fast_gicp->setNumThreads(8);  // 可配置参数,给工程实现可以设置一个，论文可设置一个
+      fast_gicp->setNumThreads(6);
       // fast_gicp->setTransformationEpsilon(0.0001);   // 若两次估计间差异小于0.0001，则认为已收敛
       fast_gicp->setTransformationEpsilon(0.001);
       fast_gicp->setMaximumIterations(64);  // 最大迭代次数
@@ -306,14 +326,26 @@ private:
       // vgicp->setCorrespondenceRandomness(20);
 
       // gpt推荐参数
-      vgicp->setNumThreads(8);                 // 自动使用硬件线程数，保留
-      vgicp->setResolution(0.4);               // 分辨率建议降低（更细粒度的 voxel 支持更准确的高斯建模）
-      vgicp->setTransformationEpsilon(1e-4);   // 收敛阈值适当收紧，避免过早收敛
+      vgicp->setNumThreads(6);
+      vgicp->setResolution(1.0);               // 分辨率建议降低（更细粒度的 voxel 支持更准确的高斯建模）
+      vgicp->setTransformationEpsilon(1e-3);   // 收敛阈值适当收紧，避免过早收敛
       vgicp->setMaximumIterations(100);        // 通常 64 是够的，也可以调到 100 查看差异
       vgicp->setCorrespondenceRandomness(20);  // 对退化环境，减少随机邻域点数，有助于抑制噪声影响
 
       return vgicp;
       /* code */
+    } else if (reg_method == "ICP") {
+      NODELET_INFO("ICP (Point-to-Point) is selected");
+      std::cout << "registration: ICP" << std::endl;
+
+      pcl::IterativeClosestPoint<PointT, PointT>::Ptr icp(new pcl::IterativeClosestPoint<PointT, PointT>());
+
+      icp->setMaximumIterations(50);
+      icp->setTransformationEpsilon(1e-3);
+      icp->setEuclideanFitnessEpsilon(1e-3);
+      icp->setMaxCorrespondenceDistance(3.0);  // 跟踪 1.5~3.0；重定位可临时放大
+
+      return icp;
     }
 
     // 没有返回的对象就出错，因为匹配方法不对
@@ -365,7 +397,15 @@ private:
           private_nh.param<double>("init_ori_x", 0.0),
           private_nh.param<double>("init_ori_y", 0.0),
           private_nh.param<double>("init_ori_z", 0.0)),
-        private_nh.param<double>("cool_time_duration", 0.5)));
+        private_nh.param<double>("cool_time_duration", 0.5),
+        private_nh.param<bool>("enable_frame2frame_ndt", true),
+        private_nh.param<int>("frame_to_frame_reg_num_threads", 6),
+        private_nh.param<std::string>("frame2frame_reg_method", "NDT_OMP"),
+        private_nh.param<bool>("enable_score_weighted_fusion", true),
+        private_nh.param<double>("ndt_score_good", 0.15),
+        private_nh.param<double>("ndt_score_bad", 1.5),
+        private_nh.param<double>("ndt_score_min_confidence", 0.05),
+        private_nh.param<double>("f2f_score_confidence_gain", 1.0)));
     }
   }
 
@@ -406,6 +446,7 @@ private:
       NODELET_ERROR("cloud is empty!!");
       return;
     }
+
     // ------- 3. 动态 tile 计算 -------
     // 动态地图
     // 找到当前 tile → 扩展 tile_radius → 生成 tile 列表
@@ -429,7 +470,15 @@ private:
       return;
     }
 
-    auto filtered = downsample(cloud);
+    pcl::PointCloud<PointT>::Ptr cloud_filtered(new pcl::PointCloud<PointT>);
+    pcl::CropBox<PointT> crop_box;
+    crop_box.setInputCloud(cloud);
+    crop_box.setMin(Eigen::Vector4f(-1.0f, -0.76f, 0.1f, 1.0f));
+    crop_box.setMax(Eigen::Vector4f(2.5f, 0.76f, 2.1f, 1.0f));
+    crop_box.setNegative(true);  // true: 删除框内点，保留框外点
+    crop_box.filter(*cloud_filtered);
+
+    auto filtered = downsample(cloud_filtered);
     last_scan = filtered;
 
     if (relocalizing) {
@@ -509,8 +558,6 @@ private:
     }
 
     // correct
-    // auto aligned = pose_estimator->correct(stamp, filtered);
-
     auto aligned = pose_estimator->correct(stamp, filtered);
 
     if (aligned_pub.getNumSubscribers()) {
@@ -522,7 +569,7 @@ private:
     if (status_pub.getNumSubscribers()) {
       publish_scan_matching_status(points_msg->header, aligned);
     }
-    // 发布里程计
+    // // 发布里程计
     publish_odometry(points_msg->header.stamp, pose_estimator->matrix());
   }
 
@@ -759,8 +806,19 @@ private:
     pose = pose * delta_estimater->estimated_delta();
 
     std::lock_guard<std::mutex> lock(pose_estimator_mutex);
-    pose_estimator.reset(
-      new hdl_localization::PoseEstimator(registration, pose.translation(), Eigen::Quaternionf(pose.linear()), private_nh.param<double>("cool_time_duration", 0.5)));
+    pose_estimator.reset(new hdl_localization::PoseEstimator(
+      registration,
+      pose.translation(),
+      Eigen::Quaternionf(pose.linear()),
+      private_nh.param<double>("cool_time_duration", 0.5),
+      private_nh.param<bool>("enable_frame2frame_ndt", true),
+      private_nh.param<int>("frame_to_frame_reg_num_threads", 6),
+      private_nh.param<std::string>("frame2frame_reg_method", "NDT_OMP"),
+      private_nh.param<bool>("enable_score_weighted_fusion", true),
+      private_nh.param<double>("ndt_score_good", 0.15),
+      private_nh.param<double>("ndt_score_bad", 1.5),
+      private_nh.param<double>("ndt_score_min_confidence", 0.05),
+      private_nh.param<double>("f2f_score_confidence_gain", 1.0)));
 
     relocalizing = false;
 
@@ -781,7 +839,15 @@ private:
       registration,
       Eigen::Vector3f(p.x, p.y, p.z),
       Eigen::Quaternionf(q.w, q.x, q.y, q.z),
-      private_nh.param<double>("cool_time_duration", 0.5)));
+      private_nh.param<double>("cool_time_duration", 0.5),
+      private_nh.param<bool>("enable_frame2frame_ndt", true),
+      private_nh.param<int>("frame_to_frame_reg_num_threads", 6),
+      private_nh.param<std::string>("frame2frame_reg_method", "NDT_OMP"),
+      private_nh.param<bool>("enable_score_weighted_fusion", true),
+      private_nh.param<double>("ndt_score_good", 0.15),
+      private_nh.param<double>("ndt_score_bad", 1.5),
+      private_nh.param<double>("ndt_score_min_confidence", 0.05),
+      private_nh.param<double>("f2f_score_confidence_gain", 1.0)));
   }
 
   /**

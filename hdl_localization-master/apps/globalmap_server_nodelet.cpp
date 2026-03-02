@@ -50,7 +50,19 @@ public:
 
     tile_dir = private_nh.param<std::string>("tile_map_dir", "/home/scy/autoware_map_output/pointcloud_map");
 
-    YAML::Node config = YAML::LoadFile(metadata_file);
+    std::ifstream metadata_ifs(metadata_file);
+    if (!metadata_ifs.good()) {
+      NODELET_FATAL_STREAM("metadata_file not found or unreadable: " << metadata_file);
+      return;
+    }
+
+    YAML::Node config;
+    try {
+      config = YAML::LoadFile(metadata_file);
+    } catch (const YAML::Exception& e) {
+      NODELET_FATAL_STREAM("failed to parse metadata_file: " << metadata_file << ", error: " << e.what());
+      return;
+    }
 
     x_res = config["x_resolution"].as<double>();
     y_res = config["y_resolution"].as<double>();

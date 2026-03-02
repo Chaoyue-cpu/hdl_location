@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <launch>
   <!-- arguments -->
-  <arg name="nodelet_manager" default="velodyne_nodelet_manager" />
+  <arg name="nodelet_manager" default="$(anon hdl_localization_nodelet_manager)" />
   <arg name="points_topic" default="/perception/lidar_up_pointcloud" />
   <!-- input clouds are transformed in odom_child_frame, and then localization is performed in that frame -->
   <!-- this is useful to match the LIDAR and IMU coodinate systems -->
@@ -15,6 +15,11 @@
   <arg name="invert_imu_gyro" default="false" />
   <arg name="use_global_localization" default="false" />
   <arg name="imu_topic" default="/localization/imu" />
+  <arg name="enable_frame2frame_ndt" default="true" />
+  <!-- NDT_OMP -->
+  <arg name="frame2frame_reg_method" default="FAST_GICP" />
+  <arg name="enable_score_weighted_fusion" default="true" />
+  <arg name="f2f_score_confidence_gain" default="5.0" />
   <arg name="enable_robot_odometry_prediction" value="false" />
   <arg name="robot_odom_frame_id" value="odom" />
   <arg name="plot_estimation_errors" value="false" />
@@ -52,8 +57,8 @@
 <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/DLO_half_keyframe11_0.05resolution.pcd" /> -->
 
 <param name="globalmap_pcd" value="/media/scy/新加卷/数据集/locus多个地下矿井/真值/_ground_truth-20250124T153559Z-001/_ground_truth/D_Tunnel_Husky4_gt/h4_sr2_gt_map.pcd" />
-<param name="metadata_file" value="/home/scy/autoware_map_output/0805/hdl/pointcloud_map_metadata.yaml" />
-<param name="tile_map_dir" value="/home/scy/autoware_map_output/0805/hdl/pointcloud_map.pcd" />    
+<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/0805/ours--optimized-2/pointcloud_map_metadata.yaml" />
+<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/0805/ours--optimized-2/pointcloud_map.pcd" />    
       <param name="convert_utm_to_local" value="true" />
       <param name="downsample_resolution" value="0.3" />
     </node>
@@ -61,7 +66,7 @@
     <!-- hdl_localization_nodelet -->
     <node pkg="nodelet" type="nodelet" name="hdl_localization_nodelet" args="load hdl_localization/HdlLocalizationNodelet $(arg nodelet_manager)">
      <!-- 地图参数 -->
-      <param name="metadata_file" value="/home/scy/autoware_map_output/0805/hdl/pointcloud_map_metadata.yaml" />
+      <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/0805/ours--optimized-2/pointcloud_map_metadata.yaml" />
       <param name="tile_radius" value="1" />   <!-- 1=3x3, 2=5x5 -->
 <param name="time_offset_lidar_to_imu" value="0.0" />
 
@@ -79,14 +84,24 @@
       <param name="enable_robot_odometry_prediction" value="$(arg enable_robot_odometry_prediction)" />
       <param name="robot_odom_frame_id" value="$(arg robot_odom_frame_id)" />
       <!-- ndt settings -->
-      <!-- available reg_methods: NDT_OMP, NDT_CUDA_P2D, NDT_CUDA_D2D，FAST_VGICP，GICP，FAST_VGICP-->
-      <param name="reg_method" value="FAST_VGICP" />
+      <!-- available reg_methods: NDT_OMP, NDT_CUDA_P2D, NDT_CUDA_D2D，FAST_VGICP，GICP，FAST_VGICP,FAST_GICP-->
+      <param name="reg_method" value="NDT_OMP" />
       <!-- if NDT is slow for your PC, try DIRECT1 serach method, which is a bit unstable but extremely fast -->
       <param name="ndt_neighbor_search_method" value="DIRECT7" />
       <param name="ndt_neighbor_search_radius" value="2.0" />
       <param name="ndt_resolution" value="1.0" />
+      <param name="enable_frame2frame_ndt" value="$(arg enable_frame2frame_ndt)" />
+      <param name="frame_to_frame_reg_num_threads" value="6" />
+      <param name="frame2frame_reg_method" value="$(arg frame2frame_reg_method)" />
+      <param name="enable_score_weighted_fusion" value="$(arg enable_score_weighted_fusion)" />
+      <param name="ndt_score_good" value="0.15" />
+      <param name="ndt_score_bad" value="1.5" />
+      <param name="ndt_score_min_confidence" value="0.05" />
+      <param name="f2f_score_confidence_gain" value="$(arg f2f_score_confidence_gain)" />
+      <!-- <param name="ndt_neighbor_search_radius" value="1.0" />
+      <param name="ndt_resolution" value="0.6" /> -->
       <!-- 初始0.1，会有个别帧索引溢出的问题 -->
-      <param name="downsample_resolution" value="0.20" />
+      <param name="downsample_resolution" value="0.15" />
           <!-- ======== IMU to base 的四元数 ======== -->
     <param name="q_imu_to_base/x" value="1.0" />
     <param name="q_imu_to_base/y" value="0.0" />
@@ -102,15 +117,42 @@
       <!-- otherwise, you need to input an initial pose with "2D Pose Estimate" on rviz" -->
       <!--gt地图初始位姿  -->
     <param name="specify_init_pose" value="true" />
-      <param name="init_pos_x" value="0.0" />
-      <param name="init_pos_y" value="0.0" />
-      <param name="init_pos_z" value="0.0" />
-      <param name="init_ori_w" value="1.0" />
-      <param name="init_ori_x" value="0.0" />
-      <param name="init_ori_y" value="0.0" />
-      <param name="init_ori_z" value="0.0" />
+    <!-- 605s -->
+      <param name="init_pos_x" value="1472.937134" />
+      <param name="init_pos_y" value="-119.442673" />
+      <param name="init_pos_z" value="-50.079445" />
+      <param name="init_ori_w" value="0.015251" />
+      <param name="init_ori_x" value="-0.026834" />
+      <param name="init_ori_y" value="0.155982" />
+      <param name="init_ori_z" value="-0.987278" />
+<!-- 693s -->
+      <!-- <param name="init_pos_x" value="1100.937134" />
+      <param name="init_pos_y" value="-132.442673" />
+      <param name="init_pos_z" value="-35.079445" />
+      <param name="init_ori_w" value="0.015251" />
+      <param name="init_ori_x" value="-0.026834" />
+      <param name="init_ori_y" value="0.155982" />
+      <param name="init_ori_z" value="-0.987278" /> -->
 
-      
+      <!-- 837s -->
+      <!-- <param name="init_pos_x" value="1100.937134" />
+      <param name="init_pos_y" value="-132.442673" />
+      <param name="init_pos_z" value="-35.079445" />
+      <param name="init_ori_w" value="0.015251" />
+      <param name="init_ori_x" value="-0.026834" />
+      <param name="init_ori_y" value="0.155982" />
+      <param name="init_ori_z" value="-0.987278" /> -->
+
+
+      <!-- 912s -->
+      <!-- <param name="init_pos_x" value="1100.937134" />
+      <param name="init_pos_y" value="-132.442673" />
+      <param name="init_pos_z" value="-35.079445" />
+      <param name="init_ori_w" value="0.015251" />
+      <param name="init_ori_x" value="-0.026834" />
+      <param name="init_ori_y" value="0.155982" />
+      <param name="init_ori_z" value="-0.987278" /> -->
+
       <param name="use_global_localization" value="$(arg use_global_localization)" />
     </node>
 <!-- 修改 -->

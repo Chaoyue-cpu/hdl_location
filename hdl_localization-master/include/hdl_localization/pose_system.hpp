@@ -79,10 +79,10 @@ public:
     Vector3t acc = qt * acc_;
     // std::cout << "acc_world (with gravity): " << acc.transpose() << std::endl;
 
-    next_state.middleRows(3, 3) = vt + (acc - g) * dt;
+    // next_state.middleRows(3, 3) = vt + (acc - g) * dt;
     // std::cout << "acc_world-g (with gravity): " << (acc - g).transpose() << std::endl;
     // ROS_INFO_STREAM("acc_world-g (with gravity): " << (acc - g).transpose());
-    // next_state.middleRows(3, 3) = vt; // + (acc - g) * dt;		// acceleration didn't contribute to accuracy due to large noise
+    next_state.middleRows(3, 3) = vt;  // + (acc - g) * dt;		// acceleration didn't contribute to accuracy due to large noise
 
     // orientation
     // 使用imu预测

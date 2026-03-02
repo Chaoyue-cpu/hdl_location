@@ -1,6 +1,14 @@
 #include <hdl_localization/pose_estimator.hpp>
 
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <limits>
+
 #include <pcl/filters/voxel_grid.h>
+#include <pclomp/ndt_omp.h>
+#include <fast_gicp/gicp/fast_gicp.hpp>
+#include <fast_gicp/gicp/impl/fast_gicp_impl.hpp>
 #include <hdl_localization/pose_system.hpp>
 #include <hdl_localization/odom_system.hpp>
 #include <kkl/alg/unscented_kalman_filter.hpp>
@@ -20,9 +28,32 @@ namespace hdl_localization {
 // pos                       —— 初始位置（3维）
 // quat                      —— 初始姿态（四元数）
 // cool_time_duration        —— “冷却时间”，用于控制何时更新位姿
-PoseEstimator::PoseEstimator(pcl::Registration<PointT, PointT>::Ptr& registration, const Eigen::Vector3f& pos, const Eigen::Quaternionf& quat, double cool_time_duration)
+PoseEstimator::PoseEstimator(
+  pcl::Registration<PointT, PointT>::Ptr& registration,
+  const Eigen::Vector3f& pos,
+  const Eigen::Quaternionf& quat,
+  double cool_time_duration,
+  bool enable_frame2frame_ndt,
+  int frame_to_frame_reg_num_threads,
+  const std::string& frame2frame_reg_method,
+  bool enable_score_weighted_fusion,
+  double ndt_score_good,
+  double ndt_score_bad,
+  double ndt_score_min_confidence,
+  double f2f_score_confidence_gain)
 : registration(registration),
-  cool_time_duration(cool_time_duration) {
+  cool_time_duration(cool_time_duration),
+  enable_frame2frame_ndt(enable_frame2frame_ndt),
+  map_trans_noise(0.3),
+  map_rot_noise(0.1),
+  f2f_trans_noise(0.9),
+  f2f_rot_noise(0.3),
+  enable_score_weighted_fusion(enable_score_weighted_fusion),
+  ndt_score_good(ndt_score_good),
+  ndt_score_bad(ndt_score_bad),
+  ndt_score_min_confidence(ndt_score_min_confidence),
+  f2f_score_confidence_gain(std::max(0.0, f2f_score_confidence_gain)),
+  prev_map_pose(Eigen::Matrix4f::Identity()) {
   // 初始化最后一次观测的变换矩阵（4x4单位矩阵）
   last_observation = Eigen::Matrix4f::Identity();
 
@@ -31,6 +62,7 @@ PoseEstimator::PoseEstimator(pcl::Registration<PointT, PointT>::Ptr& registratio
 
   // 设置平移部分为初始位置向量
   last_observation.block<3, 1>(0, 3) = pos;
+  prev_map_pose = last_observation;
 
   // 设置过程噪声协方差矩阵（16x16），用于UKF的状态预测
   process_noise = Eigen::MatrixXf::Identity(16, 16);
@@ -89,6 +121,32 @@ PoseEstimator::PoseEstimator(pcl::Registration<PointT, PointT>::Ptr& registratio
     mean,               // 初始状态均值
     cov                 // 初始协方差
     ));
+
+  std::string f2f_method_upper = frame2frame_reg_method;
+  std::transform(f2f_method_upper.begin(), f2f_method_upper.end(), f2f_method_upper.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+
+  if (f2f_method_upper == "FAST_GICP") {
+    fast_gicp::FastGICP<PointT, PointT>::Ptr f2f_fast_gicp(new fast_gicp::FastGICP<PointT, PointT>());
+    f2f_fast_gicp->setNumThreads(std::max(1, frame_to_frame_reg_num_threads));
+    f2f_fast_gicp->setTransformationEpsilon(1e-3);
+    f2f_fast_gicp->setMaximumIterations(64);
+    f2f_fast_gicp->setMaxCorrespondenceDistance(2.0);
+    f2f_fast_gicp->setCorrespondenceRandomness(20);
+    frame2frame_registration = f2f_fast_gicp;
+    ROS_INFO_STREAM("frame-to-frame registration: FAST_GICP");
+  } else {
+    if (f2f_method_upper != "NDT_OMP") {
+      ROS_WARN_STREAM("unknown frame2frame_reg_method: " << frame2frame_reg_method << ", fallback to NDT_OMP");
+    }
+    pclomp::NormalDistributionsTransform<PointT, PointT>::Ptr ndt(new pclomp::NormalDistributionsTransform<PointT, PointT>());
+    ndt->setResolution(1.0);
+    ndt->setTransformationEpsilon(1e-3);
+    ndt->setMaximumIterations(30);
+    ndt->setNumThreads(std::max(1, frame_to_frame_reg_num_threads));
+    ndt->setNeighborhoodSearchMethod(pclomp::DIRECT7);
+    frame2frame_registration = ndt;
+    ROS_INFO_STREAM("frame-to-frame registration: NDT_OMP");
+  }
 }
 
 PoseEstimator::~PoseEstimator() {}
@@ -106,6 +164,84 @@ static double now_thread_cpu_ms() {
   timespec ts;
   clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
   return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
+}
+
+bool PoseEstimator::compute_f2f_absolute_pose(
+  const pcl::PointCloud<PointT>::ConstPtr& cloud,
+  const Eigen::Matrix4f& init_guess,
+  Eigen::Matrix4f* f2f_absolute_pose,
+  double* f2f_fitness_score) {
+  if (!enable_frame2frame_ndt || !frame2frame_registration || !prev_cloud || !f2f_absolute_pose) {
+    return false;
+  }
+
+  frame2frame_registration->setInputTarget(prev_cloud);
+  frame2frame_registration->setInputSource(cloud);
+
+  const Eigen::Matrix4f init_rel = prev_map_pose.inverse() * init_guess;
+  pcl::PointCloud<PointT> aligned;
+  frame2frame_registration->align(aligned, init_rel);
+
+  if (!frame2frame_registration->hasConverged()) {
+    return false;
+  }
+
+  *f2f_absolute_pose = prev_map_pose * frame2frame_registration->getFinalTransformation();
+  if (f2f_fitness_score) {
+    *f2f_fitness_score = frame2frame_registration->getFitnessScore();
+  }
+  return true;
+}
+
+double PoseEstimator::score_to_confidence(double score) const {
+  const double min_conf = std::min(std::max(ndt_score_min_confidence, 0.0), 1.0);
+  if (!std::isfinite(score)) {
+    return min_conf;
+  }
+  if (ndt_score_bad <= ndt_score_good + 1e-9) {
+    return 1.0;
+  }
+
+  const double normalized = std::max(0.0, std::min(1.0, (ndt_score_bad - score) / (ndt_score_bad - ndt_score_good)));
+  return min_conf + (1.0 - min_conf) * normalized;
+}
+
+Eigen::Matrix4f PoseEstimator::fuse_map_and_f2f_pose(const Eigen::Matrix4f& map_pose, const Eigen::Matrix4f& f2f_pose, double map_fitness_score, double f2f_fitness_score) const {
+  const double map_trans_var = std::max(map_trans_noise * map_trans_noise, 1e-9);
+  const double f2f_trans_var = std::max(f2f_trans_noise * f2f_trans_noise, 1e-9);
+  const double map_rot_var = std::max(map_rot_noise * map_rot_noise, 1e-9);
+  const double f2f_rot_var = std::max(f2f_rot_noise * f2f_rot_noise, 1e-9);
+
+  double map_conf = 1.0;
+  double f2f_conf = 1.0;
+  if (enable_score_weighted_fusion) {
+    map_conf = score_to_confidence(map_fitness_score);
+    f2f_conf = score_to_confidence(f2f_fitness_score) * f2f_score_confidence_gain;
+  }
+
+  const double inv_map_trans = map_conf / map_trans_var;
+  const double inv_f2f_trans = f2f_conf / f2f_trans_var;
+  const double inv_map_rot = map_conf / map_rot_var;
+  const double inv_f2f_rot = f2f_conf / f2f_rot_var;
+
+  const double w_f2f_trans = inv_f2f_trans / std::max(inv_map_trans + inv_f2f_trans, 1e-9);
+  const double w_f2f_rot = inv_f2f_rot / std::max(inv_map_rot + inv_f2f_rot, 1e-9);
+
+  const Eigen::Vector3f p_map = map_pose.block<3, 1>(0, 3);
+  const Eigen::Vector3f p_f2f = f2f_pose.block<3, 1>(0, 3);
+  const Eigen::Vector3f p_fused = (1.0 - w_f2f_trans) * p_map + w_f2f_trans * p_f2f;
+
+  Eigen::Quaternionf q_map(map_pose.block<3, 3>(0, 0));
+  Eigen::Quaternionf q_f2f(f2f_pose.block<3, 3>(0, 0));
+  if (q_map.coeffs().dot(q_f2f.coeffs()) < 0.0f) {
+    q_f2f.coeffs() *= -1.0f;
+  }
+  const Eigen::Quaternionf q_fused = q_map.slerp(w_f2f_rot, q_f2f).normalized();
+
+  Eigen::Matrix4f fused = Eigen::Matrix4f::Identity();
+  fused.block<3, 1>(0, 3) = p_fused;
+  fused.block<3, 3>(0, 0) = q_fused.toRotationMatrix();
+  return fused;
 }
 /**
  * @brief predict
@@ -292,50 +428,63 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   // 当前帧雷达点云
   reg->setInputSource(cloud);
   // ====== 开始计时 ======
-  // auto t0w = std::chrono::steady_clock::now();
-  // double t0c = now_thread_cpu_ms();
+  auto t0w = std::chrono::steady_clock::now();
+  double t0c = now_thread_cpu_ms();
 
   reg->align(*aligned, init_guess);
 
   // ====== 结束计时 ======
-  // auto t1w = std::chrono::steady_clock::now();
-  // double t1c = now_thread_cpu_ms();
+  auto t1w = std::chrono::steady_clock::now();
+  double t1c = now_thread_cpu_ms();
 
-  // double wall = std::chrono::duration<double, std::milli>(t1w - t0w).count();
-  // double cpu = t1c - t0c;
-  // std::cout << "[GICP] wall=" << wall << " ms, cpu=" << cpu << " ms\n";
+  double wall = std::chrono::duration<double, std::milli>(t1w - t0w).count();
+  double cpu = t1c - t0c;
+  std::cout << "[GICP] wall=" << wall << " ms, cpu=" << cpu << " ms\n";
   // // solver.iterations()
-  // std::cout << "cloud_size=" << cloud->size() << " conv=" << reg->hasConverged() << std::endl;
+  std::cout << " conv=" << reg->hasConverged() << std::endl;
 
-  // 提取最终变换矩阵
-  Eigen::Matrix4f trans = reg->getFinalTransformation();
+  // 提取帧到地图位姿（地图观测）
+  Eigen::Matrix4f map_pose = reg->getFinalTransformation();
+  const double map_fitness_score = reg->getFitnessScore();
+  Eigen::Matrix4f fused_pose = map_pose;
+  Eigen::Matrix4f f2f_pose = Eigen::Matrix4f::Identity();
+  double f2f_fitness_score = std::numeric_limits<double>::quiet_NaN();
+  const bool has_f2f_pose = compute_f2f_absolute_pose(cloud, init_guess, &f2f_pose, &f2f_fitness_score);
+  if (has_f2f_pose) {
+    fused_pose = fuse_map_and_f2f_pose(map_pose, f2f_pose, map_fitness_score, f2f_fitness_score);
+  }
   // std::cout << "[TRANSFORM] Current frame pose:" << std::endl;
   // std::cout << trans << std::endl;
 
-  Eigen::Vector3f p = trans.block<3, 1>(0, 3);    // 平移
-  Eigen::Quaternionf q(trans.block<3, 3>(0, 0));  // 姿态
+  Eigen::Vector3f p = fused_pose.block<3, 1>(0, 3);    // 平移
+  Eigen::Quaternionf q(fused_pose.block<3, 3>(0, 0));  // 姿态
 
   // 确保四元数方向一致（避免跳变）
   if (quat().coeffs().dot(q.coeffs()) < 0.0f) {
     q.coeffs() *= -1.0f;
   }
 
+  ROS_INFO_STREAM(
+    "[GICP] fused pose p=[" << p.x() << ", " << p.y() << ", " << p.z() << "] "
+                            << "q=[w " << q.w() << ", x " << q.x() << ", y " << q.y() << ", z " << q.z() << "] "
+                            << "f2f_used=" << (has_f2f_pose ? "true" : "false") << " map_score=" << map_fitness_score << " f2f_score=" << f2f_fitness_score);
+
   // 构造观测向量 observation（位置+四元数，共7维）,已 修正四元数正负
   Eigen::VectorXf observation(7);
   observation.middleRows(0, 3) = p;
   observation.middleRows(3, 4) = Eigen::Vector4f(q.w(), q.x(), q.y(), q.z());
 
-  // 保存最新的点云配准观测结果
-  last_observation = trans;
+  // 保存最新融合后的观测结果
+  last_observation = fused_pose;
 
-  // 记录预测误差：无预测时的误差,registration->getFinalTransformation()就是trans
-  wo_pred_error = no_guess.inverse() * reg->getFinalTransformation();
+  // 记录预测误差（基于融合观测）
+  wo_pred_error = no_guess.inverse() * fused_pose;
 
   // 执行UKF状态更新（修正）
   ukf->correct(observation);
 
   // 记录IMU预测误差
-  imu_pred_error = imu_guess.inverse() * reg->getFinalTransformation();
+  imu_pred_error = imu_guess.inverse() * fused_pose;
 
   // 如果有odom_ukf，进行里程计UKF的修正
   if (odom_ukf) {
@@ -348,14 +497,131 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
     odom_ukf->correct(observation);
 
     // 记录里程计预测误差
-    odom_pred_error = odom_guess.inverse() * reg->getFinalTransformation();
+    odom_pred_error = odom_guess.inverse() * fused_pose;
     // 记录融合误差
-    imu_odom_pred_error = init_guess.inverse() * reg->getFinalTransformation();
+    imu_odom_pred_error = init_guess.inverse() * fused_pose;
   }
+
+  prev_cloud = cloud;
+  prev_map_pose = fused_pose;
 
   // 返回配准后的点云
   return aligned;
 }
+
+//   // 如果没有启用odom_ukf，说明只使用IMU，那么初始猜测直接来自IMU（ukf）
+//   if (!odom_ukf) {
+//     // 初始为输入的位姿
+//     init_guess = imu_guess = matrix();  // 从ukf当前状态提取IMU预测
+//   } else {
+//     // 同时使用IMU和里程计
+//     imu_guess = matrix();        // 从IMU相关ukf获取预测,mean就是预测值
+//     odom_guess = odom_matrix();  // 从里程计ukf获取预测
+
+//     // --- 联合融合 IMU + Odom 的状态均值和协方差 ---
+
+//     // 构造IMU状态的7维观测（位置3 + 姿态4）
+//     Eigen::VectorXf imu_mean(7);
+//     // mean.block<3, 1>(0, 0)取3行一列的值,从0行0列开始
+//     imu_mean.block<3, 1>(0, 0) = ukf->mean.block<3, 1>(0, 0);  // 位置,其实就等于上面imu_guess即matrix()的返回值
+//     imu_mean.block<4, 1>(3, 0) = ukf->mean.block<4, 1>(6, 0);  // 姿态四元数,中间三维速度
+
+//     // 提取IMU协方差的相关子块,初始化IMU的置信度,
+//     Eigen::MatrixXf imu_cov = Eigen::MatrixXf::Identity(7, 7);
+//     imu_cov.block<3, 3>(0, 0) = ukf->cov.block<3, 3>(0, 0);  // 提取3行3列
+//     imu_cov.block<3, 4>(0, 3) = ukf->cov.block<3, 4>(0, 6);
+//     imu_cov.block<4, 3>(3, 0) = ukf->cov.block<4, 3>(6, 0);
+//     imu_cov.block<4, 4>(3, 3) = ukf->cov.block<4, 4>(6, 6);
+
+//     // 里程计的状态均值和协方差（也是假设为位置+姿态）
+//     Eigen::VectorXf odom_mean = odom_ukf->mean;
+//     Eigen::MatrixXf odom_cov = odom_ukf->cov;
+
+//     // 如果IMU和odom的四元数方向相反（内积小于0），统一符号
+//     if (imu_mean.tail<4>().dot(odom_mean.tail<4>()) < 0.0) {
+//       odom_mean.tail<4>() *= -1.0;
+//     }
+
+//     // 使用协方差加权融合（经典信息融合公式）
+//     Eigen::MatrixXf inv_imu_cov = imu_cov.inverse();
+//     Eigen::MatrixXf inv_odom_cov = odom_cov.inverse();
+//     Eigen::MatrixXf fused_cov = (inv_imu_cov + inv_odom_cov).inverse();
+//     Eigen::VectorXf fused_mean = fused_cov * inv_imu_cov * imu_mean + fused_cov * inv_odom_cov * odom_mean;
+
+//     // 构造融合后的初始猜测矩阵 init_guess
+//     init_guess.block<3, 1>(0, 3) = Eigen::Vector3f(fused_mean[0], fused_mean[1], fused_mean[2]);                                                    // 位置
+//     init_guess.block<3, 3>(0, 0) = Eigen::Quaternionf(fused_mean[3], fused_mean[4], fused_mean[5], fused_mean[6]).normalized().toRotationMatrix();  // 姿态
+//   }
+
+//   // 配准对齐点云 cloud 到地图坐标系，使用 init_guess 作为初始估计
+//   pcl::PointCloud<PointT>::Ptr aligned(new pcl::PointCloud<PointT>());
+//   // 当前帧雷达点云
+//   reg->setInputSource(cloud);
+//   // ====== 开始计时 ======
+//   // auto t0w = std::chrono::steady_clock::now();
+//   // double t0c = now_thread_cpu_ms();
+
+//   reg->align(*aligned, init_guess);
+
+//   // ====== 结束计时 ======
+//   // auto t1w = std::chrono::steady_clock::now();
+//   // double t1c = now_thread_cpu_ms();
+
+//   // double wall = std::chrono::duration<double, std::milli>(t1w - t0w).count();
+//   // double cpu = t1c - t0c;
+//   // std::cout << "[GICP] wall=" << wall << " ms, cpu=" << cpu << " ms\n";
+//   // // solver.iterations()
+//   std::cout << " conv=" << reg->hasConverged() << std::endl;
+
+//   // 提取最终变换矩阵
+//   Eigen::Matrix4f trans = reg->getFinalTransformation();
+//   // std::cout << "[TRANSFORM] Current frame pose:" << std::endl;
+//   // std::cout << trans << std::endl;
+
+//   Eigen::Vector3f p = trans.block<3, 1>(0, 3);    // 平移
+//   Eigen::Quaternionf q(trans.block<3, 3>(0, 0));  // 姿态
+
+//   // 确保四元数方向一致（避免跳变）
+//   if (quat().coeffs().dot(q.coeffs()) < 0.0f) {
+//     q.coeffs() *= -1.0f;
+//   }
+
+//   // 构造观测向量 observation（位置+四元数，共7维）,已 修正四元数正负
+//   Eigen::VectorXf observation(7);
+//   observation.middleRows(0, 3) = p;
+//   observation.middleRows(3, 4) = Eigen::Vector4f(q.w(), q.x(), q.y(), q.z());
+
+//   // 保存最新的点云配准观测结果
+//   last_observation = trans;
+
+//   // 记录预测误差：无预测时的误差,registration->getFinalTransformation()就是trans
+//   wo_pred_error = no_guess.inverse() * reg->getFinalTransformation();
+
+//   // 执行UKF状态更新（修正）
+//   ukf->correct(observation);
+
+//   // 记录IMU预测误差
+//   imu_pred_error = imu_guess.inverse() * reg->getFinalTransformation();
+
+//   // 如果有odom_ukf，进行里程计UKF的修正
+//   if (odom_ukf) {
+//     // 确保四元数方向一致
+//     if (observation.tail<4>().dot(odom_ukf->mean.tail<4>()) < 0.0) {
+//       odom_ukf->mean.tail<4>() *= -1.0;
+//     }
+
+//     // 修正里程计UKF
+//     odom_ukf->correct(observation);
+
+//     // 记录里程计预测误差
+//     odom_pred_error = odom_guess.inverse() * reg->getFinalTransformation();
+//     // 记录融合误差
+//     imu_odom_pred_error = init_guess.inverse() * reg->getFinalTransformation();
+//   }
+
+//   // 返回配准后的点云
+//   return trans;
+// }
 
 /* getters */
 ros::Time PoseEstimator::last_correction_time() const {

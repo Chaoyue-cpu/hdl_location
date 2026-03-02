@@ -2,9 +2,13 @@
 #define POSE_ESTIMATOR_HPP
 
 #include <memory>
+#include <string>
 #include <boost/optional.hpp>
+#include <mutex>
 
 #include <ros/ros.h>
+#include <Eigen/Core>
+#include <Eigen/Geometry>
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
 #include <pcl/registration/registration.h>
@@ -36,7 +40,19 @@ public:
    * @param quat                initial orientation
    * @param cool_time_duration  during "cool time", prediction is not performed
    */
-  PoseEstimator(pcl::Registration<PointT, PointT>::Ptr& registration, const Eigen::Vector3f& pos, const Eigen::Quaternionf& quat, double cool_time_duration = 1.0);
+  PoseEstimator(
+    pcl::Registration<PointT, PointT>::Ptr& registration,
+    const Eigen::Vector3f& pos,
+    const Eigen::Quaternionf& quat,
+    double cool_time_duration = 1.0,
+    bool enable_frame2frame_ndt = true,
+    int frame_to_frame_reg_num_threads = 6,
+    const std::string& frame2frame_reg_method = "NDT_OMP",
+    bool enable_score_weighted_fusion = true,
+    double ndt_score_good = 0.15,
+    double ndt_score_bad = 1.5,
+    double ndt_score_min_confidence = 0.05,
+    double f2f_score_confidence_gain = 1.0);
   ~PoseEstimator();
 
   /**
@@ -87,6 +103,10 @@ public:
   const boost::optional<Eigen::Matrix4f>& imu_odom_prediction_error() const;
 
 private:
+  bool compute_f2f_absolute_pose(const pcl::PointCloud<PointT>::ConstPtr& cloud, const Eigen::Matrix4f& init_guess, Eigen::Matrix4f* f2f_absolute_pose, double* f2f_fitness_score);
+  Eigen::Matrix4f fuse_map_and_f2f_pose(const Eigen::Matrix4f& map_pose, const Eigen::Matrix4f& f2f_pose, double map_fitness_score, double f2f_fitness_score) const;
+  double score_to_confidence(double score) const;
+
   ros::Time init_stamp;  // when the estimator was initialized
   ros::Time prev_stamp;  // when the estimator was updated last time
   // 校正步骤（correction step） 的数学本质是通过融合预测值与观测值，得到最优估计（Minimum Mean Square Error Estimate）。
@@ -104,6 +124,21 @@ private:
   boost::optional<Eigen::Matrix4f> imu_pred_error;
   boost::optional<Eigen::Matrix4f> odom_pred_error;
   boost::optional<Eigen::Matrix4f> imu_odom_pred_error;
+
+  bool enable_frame2frame_ndt;
+  double map_trans_noise;
+  double map_rot_noise;
+  double f2f_trans_noise;
+  double f2f_rot_noise;
+  bool enable_score_weighted_fusion;
+  double ndt_score_good;
+  double ndt_score_bad;
+  double ndt_score_min_confidence;
+  double f2f_score_confidence_gain;
+
+  pcl::Registration<PointT, PointT>::Ptr frame2frame_registration;
+  pcl::PointCloud<PointT>::ConstPtr prev_cloud;
+  Eigen::Matrix4f prev_map_pose;
 
   pcl::Registration<PointT, PointT>::Ptr registration;
   mutable std::mutex reg_mtx_;
