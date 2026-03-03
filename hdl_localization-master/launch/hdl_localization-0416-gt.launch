@@ -9,13 +9,13 @@
     <arg name="odom_child_frame_id" default="base_link" />
 
 
-  <!-- optional arguments，不用imu时除了use_global_localization全false -->
+  <!-- ndt不用imu，gicp建议用，optional arguments，不用imu时除了use_global_localization全false， -->
   <arg name="use_imu" default="true" />
   <arg name="invert_imu_acc" default="false" />
   <arg name="invert_imu_gyro" default="false" />
   <arg name="use_global_localization" default="false" />
   <arg name="imu_topic" default="/localization/imu" />
-  <arg name="enable_frame2frame_ndt" default="false" />
+  <arg name="enable_frame2frame_ndt" default="true" />
   <!-- NDT_OMP,FAST_GICP -->
   <arg name="frame2frame_reg_method" default="FAST_GICP" />
   <arg name="enable_score_weighted_fusion" default="true" />
@@ -57,16 +57,19 @@
 <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/DLO_half_keyframe11_0.05resolution.pcd" /> -->
 
 <param name="globalmap_pcd" value="/media/scy/新加卷/数据集/locus多个地下矿井/真值/_ground_truth-20250124T153559Z-001/_ground_truth/D_Tunnel_Husky4_gt/h4_sr2_gt_map.pcd" />
-<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/0416-gt/pointcloud_map_metadata.yaml" />
-<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/0416-gt/pointcloud_map.pcd" />    
+<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/公司地图/pointcloud_map_metadata.yaml" />
+<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/公司地图/pointcloud_map.pcd" />    
       <param name="convert_utm_to_local" value="true" />
-      <param name="downsample_resolution" value="0.1" />
+      <!-- ndt0.1 -->
+      <!-- <param name="downsample_resolution" value="0.1" /> -->
+            <param name="downsample_resolution" value="0.15" />
+
     </node>
 
     <!-- hdl_localization_nodelet -->
     <node pkg="nodelet" type="nodelet" name="hdl_localization_nodelet" args="load hdl_localization/HdlLocalizationNodelet $(arg nodelet_manager)">
      <!-- 地图参数 -->
-      <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/0416-gt/pointcloud_map_metadata.yaml" />
+      <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/公司地图/pointcloud_map_metadata.yaml" />
       <param name="tile_radius" value="1" />   <!-- 1=3x3, 2=5x5 -->
 <param name="time_offset_lidar_to_imu" value="0.0" />
 
@@ -86,8 +89,8 @@
       <!-- ndt settings -->
       <!-- available reg_methods:FAST_GICP, NDT_OMP, NDT_CUDA_P2D, NDT_CUDA_D2D，FAST_VGICP，GICP，FAST_VGICP,FAST_GICP-->
       <param name="reg_method" value="NDT_OMP" />
-      <!-- if NDT is slow for your PC, try DIRECT1 serach method, which is a bit unstable but extremely fast -->
-      <param name="ndt_neighbor_search_method" value="KDTREE" />
+      <!-- if NDT is slow for your PC, try DIRECT1，KDTREE serach method, which is a bit unstable but extremely fast -->
+      <param name="ndt_neighbor_search_method" value="DIRECT7" />
       <param name="ndt_neighbor_search_radius" value="2.0" />
       <param name="ndt_resolution" value="2.0" />
       <param name="ndt_num_threads" value="6" />
@@ -101,7 +104,7 @@
       <param name="enable_score_weighted_fusion" value="$(arg enable_score_weighted_fusion)" />
       <!-- 表示分数控制加权，越小加权越高 -->
       <param name="ndt_score_good" value="0.30" />
-      <param name="ndt_score_bad" value="3.0" />
+      <param name="ndt_score_bad" value="0.06" />
       <param name="ndt_score_min_confidence" value="0.05" />
       <param name="f2f_score_confidence_gain" value="$(arg f2f_score_confidence_gain)" />
       <!-- lightweight f2f confidence filtering (default off) -->
@@ -115,15 +118,18 @@
       <param name="f2f_dynamic_keep_ratio" value="0.25" />
       <param name="f2f_min_filtered_points" value="1000" />
       <!-- axis prior (1D along centerline, without cross-section area descriptor) -->
-      <param name="enable_axis_prior" value="true" />
+      <param name="enable_axis_prior" value="false" />
       <param name="axis_centerline_csv" value="/home/scy/catkin_ws_hdl_location/中轴/axis_0416_new5_noalign_centerline.csv" />
       <param name="axis_profile_csv" value="/home/scy/catkin_ws_hdl_location/中轴/axis_0416_new5_noalign_profile.csv" />
-      <param name="axis_search_window" value="20.0" />
+      <param name="axis_search_window" value="6.0" />
       <param name="axis_lateral_weight" value="1.0" />
-      <param name="axis_vertical_weight" value="2.0" />
-      <param name="axis_smooth_weight" value="0.05" />
-      <param name="axis_temporal_weight" value="0.2" />
-      <param name="axis_max_lateral" value="20.0" />
+      <param name="axis_vertical_weight" value="0.2" />
+      <param name="axis_smooth_weight" value="0.01" />
+      <param name="axis_temporal_weight" value="0.05" />
+      <param name="axis_max_lateral" value="3.0" />
+      <param name="axis_max_delta_s" value="0.15" />
+      <param name="axis_prealign_only_when_degenerate" value="false" />
+      <param name="axis_postalign_only_when_degenerate" value="true" />
       <!-- <param name="ndt_neighbor_search_radius" value="1.0" />
       <param name="ndt_resolution" value="0.6" /> -->
       <!-- 初始0.1，会有个别帧索引溢出的问题 -->
@@ -152,7 +158,15 @@
       <param name="init_ori_y" value="0.155982" />
       <param name="init_ori_z" value="-0.987278" /> -->
 <!-- 693s -->
-      <param name="init_pos_x" value="1313.937134" />
+      <!-- <param name="init_pos_x" value="1313.937134" />
+      <param name="init_pos_y" value="-272.442673" />
+      <param name="init_pos_z" value="0.879445" />
+      <param name="init_ori_w" value="0.0066545" />
+      <param name="init_ori_x" value="-0.0086711" />
+      <param name="init_ori_y" value="0.0233589" />
+      <param name="init_ori_z" value="-0.990639" /> -->
+<!-- 公司地图参数 -->
+      <param name="init_pos_x" value="1302.937134" />
       <param name="init_pos_y" value="-272.442673" />
       <param name="init_pos_z" value="0.879445" />
       <param name="init_ori_w" value="0.0066545" />

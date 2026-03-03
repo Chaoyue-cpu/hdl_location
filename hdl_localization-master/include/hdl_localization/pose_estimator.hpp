@@ -71,7 +71,10 @@ public:
     double axis_vertical_weight = 1.0,
     double axis_smooth_weight = 0.05,
     double axis_temporal_weight = 0.2,
-    double axis_max_lateral = 20.0);
+    double axis_max_lateral = 20.0,
+    double axis_max_delta_s = 0.15,
+    bool axis_prealign_only_when_degenerate = true,
+    bool axis_postalign_only_when_degenerate = true);
   ~PoseEstimator();
 
   /**
@@ -189,6 +192,10 @@ private:
   double axis_smooth_weight;
   double axis_temporal_weight;
   double axis_max_lateral;
+  double axis_max_delta_s;
+  bool axis_prealign_only_when_degenerate;
+  bool axis_postalign_only_when_degenerate;
+  bool last_map_degenerate;
   std::vector<AxisSample> axis_centerline;
   std::vector<AxisZSample> axis_profile;
   boost::optional<double> last_axis_s;

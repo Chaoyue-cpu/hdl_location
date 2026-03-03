@@ -87,7 +87,10 @@ PoseEstimator::PoseEstimator(
   double axis_vertical_weight,
   double axis_smooth_weight,
   double axis_temporal_weight,
-  double axis_max_lateral)
+  double axis_max_lateral,
+  double axis_max_delta_s,
+  bool axis_prealign_only_when_degenerate,
+  bool axis_postalign_only_when_degenerate)
 : registration(registration),
   cool_time_duration(cool_time_duration),
   enable_frame2frame_ndt(enable_frame2frame_ndt),
@@ -116,6 +119,10 @@ PoseEstimator::PoseEstimator(
   axis_smooth_weight(std::max(0.0, axis_smooth_weight)),
   axis_temporal_weight(std::max(0.0, axis_temporal_weight)),
   axis_max_lateral(std::max(0.5, axis_max_lateral)),
+  axis_max_delta_s(std::max(0.01, axis_max_delta_s)),
+  axis_prealign_only_when_degenerate(axis_prealign_only_when_degenerate),
+  axis_postalign_only_when_degenerate(axis_postalign_only_when_degenerate),
+  last_map_degenerate(false),
   prev_map_pose(Eigen::Matrix4f::Identity()) {
   // 初始化最后一次观测的变换矩阵（4x4单位矩阵）
   last_observation = Eigen::Matrix4f::Identity();
@@ -221,6 +228,14 @@ PoseEstimator::PoseEstimator(
       ROS_WARN_STREAM("axis profile csv missing or invalid, axis prior will use XY only: " << axis_profile_csv);
     } else {
       ROS_INFO_STREAM("axis prior loaded: centerline_samples=" << axis_centerline.size() << " profile_samples=" << axis_profile.size());
+      double init_s = 0.0;
+      double init_lateral = 0.0;
+      if (project_to_axis(pos, &init_s, &init_lateral)) {
+        last_axis_s = init_s;
+        ROS_INFO_STREAM("axis prior init from pose: s=" << init_s << " lateral=" << init_lateral);
+      } else {
+        ROS_WARN_STREAM("axis prior init failed to project initial pose to centerline");
+      }
     }
   }
 }
@@ -507,17 +522,17 @@ Eigen::Matrix4f PoseEstimator::apply_axis_prior(const Eigen::Matrix4f& pose, con
     }
   }
 
-  const double delta_s = best_s - s_ref;
+  const double raw_delta_s = best_s - s_ref;
+  const double delta_s = std::max(-axis_max_delta_s, std::min(axis_max_delta_s, raw_delta_s));
   Eigen::Vector3f axis_point;
   Eigen::Vector3f axis_tangent;
   if (!interpolate_axis_sample(s_ref, &axis_point, &axis_tangent)) {
     return pose;
   }
   adjusted.block<3, 1>(0, 3) = p + static_cast<float>(delta_s) * axis_tangent;
-  last_axis_s = best_s;
+  last_axis_s = s_ref + delta_s;
 
-  ROS_INFO_STREAM_THROTTLE(0.5, "[AXIS] " << stage << " s_ref=" << s_ref << " s_best=" << best_s << " delta_s=" << delta_s
-                                           << " lateral=" << lateral << " cost=" << best_cost);
+  ROS_INFO_STREAM_THROTTLE(0.5, "[AXIS] " << stage << " s_ref=" << s_ref << " s_best=" << best_s << " raw_delta_s=" << raw_delta_s << " delta_s=" << delta_s << " lateral=" << lateral << " cost=" << best_cost);
   return adjusted;
 }
 
@@ -858,7 +873,10 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   if (has_f2f_init) {
     map_init_guess = f2f_init_pose;
   }
-  map_init_guess = apply_axis_prior(map_init_guess, "prealign");
+  const bool use_axis_prealign = enable_axis_prior && (!axis_prealign_only_when_degenerate || last_map_degenerate);
+  if (use_axis_prealign) {
+    map_init_guess = apply_axis_prior(map_init_guess, "prealign");
+  }
 
   // 配准对齐点云 cloud 到地图坐标系，使用 map_init_guess 作为初始估计
   pcl::PointCloud<PointT>::Ptr aligned(new pcl::PointCloud<PointT>());
@@ -901,6 +919,7 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
       imu_odom_pred_error = init_guess.inverse() * map_init_guess;
     }
 
+    last_map_degenerate = true;
     prev_cloud = cloud;
     prev_map_pose = map_init_guess;
     return aligned;
@@ -909,7 +928,13 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   // 提取帧到地图位姿（观测值仅使用map配准结果）
   Eigen::Matrix4f map_pose = reg->getFinalTransformation();
   const double map_fitness_score = reg->getFitnessScore();
-  const Eigen::Matrix4f final_pose = apply_axis_prior(map_pose, "postalign");
+  const bool map_degenerate = !std::isfinite(map_fitness_score) || map_fitness_score >= ndt_score_bad;
+  Eigen::Matrix4f final_pose = map_pose;
+  const bool use_axis_postalign = enable_axis_prior && (!axis_postalign_only_when_degenerate || map_degenerate);
+  if (use_axis_postalign) {
+    final_pose = apply_axis_prior(map_pose, map_degenerate ? "postalign_degenerate" : "postalign");
+  }
+  last_map_degenerate = map_degenerate;
   // std::cout << "[TRANSFORM] Current frame pose:" << std::endl;
   // std::cout << trans << std::endl;
 

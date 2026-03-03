@@ -429,7 +429,10 @@ private:
         private_nh.param<double>("axis_vertical_weight", 1.0),
         private_nh.param<double>("axis_smooth_weight", 0.05),
         private_nh.param<double>("axis_temporal_weight", 0.2),
-        private_nh.param<double>("axis_max_lateral", 20.0)));
+        private_nh.param<double>("axis_max_lateral", 20.0),
+        private_nh.param<double>("axis_max_delta_s", 0.15),
+        private_nh.param<bool>("axis_prealign_only_when_degenerate", true),
+        private_nh.param<bool>("axis_postalign_only_when_degenerate", true)));
     }
   }
 
@@ -860,7 +863,10 @@ private:
       private_nh.param<double>("axis_vertical_weight", 1.0),
       private_nh.param<double>("axis_smooth_weight", 0.05),
       private_nh.param<double>("axis_temporal_weight", 0.2),
-      private_nh.param<double>("axis_max_lateral", 20.0)));
+      private_nh.param<double>("axis_max_lateral", 20.0),
+      private_nh.param<double>("axis_max_delta_s", 0.15),
+      private_nh.param<bool>("axis_prealign_only_when_degenerate", true),
+      private_nh.param<bool>("axis_postalign_only_when_degenerate", true)));
 
     relocalizing = false;
 
@@ -907,7 +913,10 @@ private:
       private_nh.param<double>("axis_vertical_weight", 1.0),
       private_nh.param<double>("axis_smooth_weight", 0.05),
       private_nh.param<double>("axis_temporal_weight", 0.2),
-      private_nh.param<double>("axis_max_lateral", 20.0)));
+      private_nh.param<double>("axis_max_lateral", 20.0),
+      private_nh.param<double>("axis_max_delta_s", 0.15),
+      private_nh.param<bool>("axis_prealign_only_when_degenerate", true),
+      private_nh.param<bool>("axis_postalign_only_when_degenerate", true)));
   }
 
   /**
