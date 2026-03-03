@@ -1,6 +1,7 @@
 #include <mutex>
 #include <memory>
 #include <iostream>
+#include <algorithm>
 
 #include <ros/ros.h>
 #include <pcl_ros/point_cloud.h>
@@ -153,7 +154,7 @@ public:
       NODELET_INFO("enable imu-based prediction");
       imu_sub = mt_nh.subscribe("/gpsimu_driver/imu_data", 256, &HdlLocalizationNodelet::imu_callback, this);
     }
-    points_sub = mt_nh.subscribe("/velodyne_points", 5, &HdlLocalizationNodelet::points_callback, this);
+    points_sub = mt_nh.subscribe("/velodyne_points", 1000, &HdlLocalizationNodelet::points_callback, this);
     initialpose_sub = nh.subscribe("/initialpose", 8, &HdlLocalizationNodelet::initialpose_callback, this);
 
     pose_pub = nh.advertise<nav_msgs::Odometry>("/odom", 5, false);
@@ -215,17 +216,22 @@ private:
     std::string ndt_neighbor_search_method = private_nh.param<std::string>("ndt_neighbor_search_method", "DIRECT7");
     double ndt_neighbor_search_radius = private_nh.param<double>("ndt_neighbor_search_radius", 2.0);
     double ndt_resolution = private_nh.param<double>("ndt_resolution", 1.0);
+    int ndt_num_threads = private_nh.param<int>("ndt_num_threads", 6);
+    int ndt_max_iterations = private_nh.param<int>("ndt_max_iterations", 64);
+    double ndt_transformation_epsilon = private_nh.param<double>("ndt_transformation_epsilon", 1e-3);
+    double ndt_step_size = private_nh.param<double>("ndt_step_size", 0.1);
+    double ndt_outlier_ratio = private_nh.param<double>("ndt_outlier_ratio", 0.55);
 
     if (reg_method == "NDT_OMP") {
       NODELET_INFO("NDT_OMP is selected");
       // 创建了一个指针，指向new的对象
       pclomp::NormalDistributionsTransform<PointT, PointT>::Ptr ndt(new pclomp::NormalDistributionsTransform<PointT, PointT>());
-      ndt->setTransformationEpsilon(0.001);
-      ndt->setNumThreads(6);
+      ndt->setNumThreads(std::max(1, ndt_num_threads));
       ndt->setResolution(ndt_resolution);
-      // 测试对比用的参数，原没有
-      ndt->setTransformationEpsilon(0.001);
-      ndt->setMaximumIterations(64);  // 最大迭代次数
+      ndt->setTransformationEpsilon(ndt_transformation_epsilon);
+      ndt->setMaximumIterations(std::max(1, ndt_max_iterations));
+      ndt->setStepSize(ndt_step_size);
+      ndt->setOutlierRatio(ndt_outlier_ratio);
 
       if (ndt_neighbor_search_method == "DIRECT1") {
         NODELET_INFO("search_method DIRECT1 is selected");
@@ -414,7 +420,16 @@ private:
         private_nh.param<double>("f2f_wall_keep_ratio", 0.25),
         private_nh.param<double>("f2f_dynamic_voxel_size", 0.5),
         private_nh.param<double>("f2f_dynamic_keep_ratio", 0.25),
-        private_nh.param<int>("f2f_min_filtered_points", 600)));
+        private_nh.param<int>("f2f_min_filtered_points", 600),
+        private_nh.param<bool>("enable_axis_prior", false),
+        private_nh.param<std::string>("axis_centerline_csv", std::string("")),
+        private_nh.param<std::string>("axis_profile_csv", std::string("")),
+        private_nh.param<double>("axis_search_window", 20.0),
+        private_nh.param<double>("axis_lateral_weight", 1.0),
+        private_nh.param<double>("axis_vertical_weight", 1.0),
+        private_nh.param<double>("axis_smooth_weight", 0.05),
+        private_nh.param<double>("axis_temporal_weight", 0.2),
+        private_nh.param<double>("axis_max_lateral", 20.0)));
     }
   }
 
@@ -475,7 +490,7 @@ private:
         return;
       }
     } else {
-      NODELET_ERROR(tfError.c_str());
+      NODELET_ERROR("%s", tfError.c_str());
       return;
     }
 
@@ -836,7 +851,16 @@ private:
       private_nh.param<double>("f2f_wall_keep_ratio", 0.25),
       private_nh.param<double>("f2f_dynamic_voxel_size", 0.5),
       private_nh.param<double>("f2f_dynamic_keep_ratio", 0.25),
-      private_nh.param<int>("f2f_min_filtered_points", 600)));
+      private_nh.param<int>("f2f_min_filtered_points", 600),
+      private_nh.param<bool>("enable_axis_prior", false),
+      private_nh.param<std::string>("axis_centerline_csv", std::string("")),
+      private_nh.param<std::string>("axis_profile_csv", std::string("")),
+      private_nh.param<double>("axis_search_window", 20.0),
+      private_nh.param<double>("axis_lateral_weight", 1.0),
+      private_nh.param<double>("axis_vertical_weight", 1.0),
+      private_nh.param<double>("axis_smooth_weight", 0.05),
+      private_nh.param<double>("axis_temporal_weight", 0.2),
+      private_nh.param<double>("axis_max_lateral", 20.0)));
 
     relocalizing = false;
 
@@ -874,7 +898,16 @@ private:
       private_nh.param<double>("f2f_wall_keep_ratio", 0.25),
       private_nh.param<double>("f2f_dynamic_voxel_size", 0.5),
       private_nh.param<double>("f2f_dynamic_keep_ratio", 0.25),
-      private_nh.param<int>("f2f_min_filtered_points", 600)));
+      private_nh.param<int>("f2f_min_filtered_points", 600),
+      private_nh.param<bool>("enable_axis_prior", false),
+      private_nh.param<std::string>("axis_centerline_csv", std::string("")),
+      private_nh.param<std::string>("axis_profile_csv", std::string("")),
+      private_nh.param<double>("axis_search_window", 20.0),
+      private_nh.param<double>("axis_lateral_weight", 1.0),
+      private_nh.param<double>("axis_vertical_weight", 1.0),
+      private_nh.param<double>("axis_smooth_weight", 0.05),
+      private_nh.param<double>("axis_temporal_weight", 0.2),
+      private_nh.param<double>("axis_max_lateral", 20.0)));
   }
 
   /**

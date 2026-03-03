@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 #include <boost/optional.hpp>
 #include <mutex>
 
@@ -61,7 +62,16 @@ public:
     double f2f_wall_keep_ratio = 0.25,
     double f2f_dynamic_voxel_size = 0.5,
     double f2f_dynamic_keep_ratio = 0.25,
-    int f2f_min_filtered_points = 600);
+    int f2f_min_filtered_points = 600,
+    bool enable_axis_prior = false,
+    const std::string& axis_centerline_csv = "",
+    const std::string& axis_profile_csv = "",
+    double axis_search_window = 20.0,
+    double axis_lateral_weight = 1.0,
+    double axis_vertical_weight = 1.0,
+    double axis_smooth_weight = 0.05,
+    double axis_temporal_weight = 0.2,
+    double axis_max_lateral = 20.0);
   ~PoseEstimator();
 
   /**
@@ -117,6 +127,12 @@ private:
   bool compute_f2f_absolute_pose(const pcl::PointCloud<PointT>::ConstPtr& cloud, const Eigen::Matrix4f& init_guess, Eigen::Matrix4f* f2f_absolute_pose, double* f2f_fitness_score);
   Eigen::Matrix4f fuse_map_and_f2f_pose(const Eigen::Matrix4f& map_pose, const Eigen::Matrix4f& f2f_pose, double map_fitness_score, double f2f_fitness_score) const;
   double score_to_confidence(double score) const;
+  bool load_axis_centerline_csv(const std::string& path);
+  bool load_axis_profile_csv(const std::string& path);
+  bool interpolate_axis_sample(double s, Eigen::Vector3f* point, Eigen::Vector3f* tangent) const;
+  bool interpolate_axis_z(double s, double* z) const;
+  bool project_to_axis(const Eigen::Vector3f& p, double* s, double* lateral_distance) const;
+  Eigen::Matrix4f apply_axis_prior(const Eigen::Matrix4f& pose, const char* stage);
 
   ros::Time init_stamp;  // when the estimator was initialized
   ros::Time prev_stamp;  // when the estimator was updated last time
@@ -156,11 +172,30 @@ private:
   double f2f_dynamic_keep_ratio;
   int f2f_min_filtered_points;
 
+  struct AxisSample {
+    double s;
+    Eigen::Vector3f p;
+  };
+
+  struct AxisZSample {
+    double s;
+    double z;
+  };
+
+  bool enable_axis_prior;
+  double axis_search_window;
+  double axis_lateral_weight;
+  double axis_vertical_weight;
+  double axis_smooth_weight;
+  double axis_temporal_weight;
+  double axis_max_lateral;
+  std::vector<AxisSample> axis_centerline;
+  std::vector<AxisZSample> axis_profile;
+  boost::optional<double> last_axis_s;
+
   pcl::Registration<PointT, PointT>::Ptr frame2frame_registration;
   pcl::PointCloud<PointT>::ConstPtr prev_cloud;
   Eigen::Matrix4f prev_map_pose;
-  bool pure_f2f_initialized;
-  Eigen::Matrix4f pure_f2f_global_pose;
 
   pcl::Registration<PointT, PointT>::Ptr registration;
   mutable std::mutex reg_mtx_;

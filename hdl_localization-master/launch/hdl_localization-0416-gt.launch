@@ -1,0 +1,188 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- arguments -->
+  <arg name="nodelet_manager" default="$(anon hdl_localization_nodelet_manager)" />
+  <arg name="points_topic" default="/perception/lidar_up_pointcloud" />
+  <!-- input clouds are transformed in odom_child_frame, and then localization is performed in that frame -->
+  <!-- this is useful to match the LIDAR and IMU coodinate systems -->
+  <!-- <arg name="odom_child_frame_id" default="imu_link" /> -->
+    <arg name="odom_child_frame_id" default="base_link" />
+
+
+  <!-- optional arguments，不用imu时除了use_global_localization全false -->
+  <arg name="use_imu" default="true" />
+  <arg name="invert_imu_acc" default="false" />
+  <arg name="invert_imu_gyro" default="false" />
+  <arg name="use_global_localization" default="false" />
+  <arg name="imu_topic" default="/localization/imu" />
+  <arg name="enable_frame2frame_ndt" default="false" />
+  <!-- NDT_OMP,FAST_GICP -->
+  <arg name="frame2frame_reg_method" default="FAST_GICP" />
+  <arg name="enable_score_weighted_fusion" default="true" />
+  <arg name="f2f_score_confidence_gain" default="2.0" />
+  <arg name="enable_robot_odometry_prediction" value="false" />
+  <arg name="robot_odom_frame_id" value="odom" />
+  <arg name="plot_estimation_errors" value="false" />
+
+  <include file="$(find hdl_global_localization)/launch/hdl_global_localization.launch" if="$(arg use_global_localization)" />
+<!-- 雷达和imu之间坐标变换，新加修改,参数顺序：yaw pitch roll -->
+<!-- static_transform_publisher x y z yaw pitch roll frame_id child_frame_id  period(milliseconds) -->
+ <!-- <node pkg="tf2_ros" type="static_transform_publisher" name="base_link_to_odom_tf" args="-2.048869 0.000000 -1.421632 -3.093764 1.563193 0.000007 $(arg robot_odom_frame_id) $(arg odom_child_frame_id) " /> -->
+  <!-- <node pkg="tf2_ros" type="static_transform_publisher" name="base_link_to_os_sensor_tf" args="0.00000000 0.00000000 0.00000000 0.0 1.56967275 3.14159259 base_link $(arg odom_child_frame_id)" /> -->
+  <!-- <node pkg="tf2_ros" type="static_transform_publisher" name="base_link_to_os_sensor_tf" args="0.00000000 0.00000000 0.00000000 0.0 1.56967275 3.14159259 base_link $(arg odom_child_frame_id)" /> -->
+    <!-- yaw: -0.00005660, pitch: 1.56967275, roll: -3.14153606yaw: 0.00000000, pitch: -1.57000000, roll: -3.14159260 -->
+<!-- 0.0 1.56967275 3.14159259tf是对的baselink imu是对的 -->
+    <!-- <node pkg="tf2_ros" type="static_transform_publisher" name="base_link_to_os_sensor_tf" args="0.00000000 0.00000000 0.00000000 0.00000000 -1.57000000 -3.14159260 $(arg odom_child_frame_id) base_link" /> -->
+  <!-- <node pkg="tf2_ros" type="static_transform_publisher" name="base_link_to_os_sensor_tf" args="0.00000000 0.00000000 0.00000000 0.0 1.56967275 3.14159259 base_link $(arg odom_child_frame_id)" /> -->
+    <!-- <node pkg="tf2_ros" type="static_transform_publisher" name="base_link_to_os_sensor_tf" args="0.00000000 0.00000000 0.00000000 -0.00006730 -1.57000000 3.14152536 base_link $(arg odom_child_frame_id)" /> -->
+<!-- 激光与imu之间的关系 -->
+    <!-- <node pkg="tf2_ros" type="static_transform_publisher" name="base_link_to_os_sensor_tf" args="0.00000000 0.00000000 0.00000000 -0.7073882691671995 -1.8939307631412416e-08 0.7068251811053657 1.8954395517797516e-08 $(arg odom_child_frame_id) base_link" /> -->
+
+
+<!-- <node pkg="tf" type="static_transform_publisher" name="lidar2base_publisher"
+      args="0 0 0 0.0  1.56967275 3.14159259  $(arg odom_child_frame_id) base_link 100" /> -->
+
+  <!-- in case you use velodyne_driver, comment out the following line -->
+  <!-- 如果你使用的是 velodyne_driver，请注释掉下面这一行 -->
+  <node pkg="nodelet" type="nodelet" name="$(arg nodelet_manager)" args="manager" output="screen"/>
+
+    <!-- globalmap_server_nodelet -->
+    <node pkg="nodelet" type="nodelet" name="globalmap_server_nodelet" args="load hdl_localization/GlobalmapServerNodelet $(arg nodelet_manager)">
+      <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/global_map.pcd" /> -->
+    <!-- <param name="globalmap_pcd" value="/home/scy/矿下地图/map_final_test_1clean.pcd" /> -->
+          <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/dlo_map.pcd" /> -->
+<!-- <param name="globalmap_pcd" value="/home/scy/map_hdl.pcd" /> -->
+<!-- 定位正常 -->
+<!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/dlo_map_all_1.pcd" /> -->
+<!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/DLO_half_keyframe11_0.05resolution.pcd" /> -->
+
+<param name="globalmap_pcd" value="/media/scy/新加卷/数据集/locus多个地下矿井/真值/_ground_truth-20250124T153559Z-001/_ground_truth/D_Tunnel_Husky4_gt/h4_sr2_gt_map.pcd" />
+<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/0416-gt/pointcloud_map_metadata.yaml" />
+<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/0416-gt/pointcloud_map.pcd" />    
+      <param name="convert_utm_to_local" value="true" />
+      <param name="downsample_resolution" value="0.1" />
+    </node>
+
+    <!-- hdl_localization_nodelet -->
+    <node pkg="nodelet" type="nodelet" name="hdl_localization_nodelet" args="load hdl_localization/HdlLocalizationNodelet $(arg nodelet_manager)">
+     <!-- 地图参数 -->
+      <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/0416-gt/pointcloud_map_metadata.yaml" />
+      <param name="tile_radius" value="1" />   <!-- 1=3x3, 2=5x5 -->
+<param name="time_offset_lidar_to_imu" value="0.0" />
+
+      <remap from="/velodyne_points" to="$(arg points_topic)" />
+      <remap from="/gpsimu_driver/imu_data" to="$(arg imu_topic)" />
+      <!-- odometry frame_id -->
+      <param name="odom_child_frame_id" value="$(arg odom_child_frame_id)" />
+      <!-- imu settings -->
+      <!-- during "cool_time", imu inputs are ignored -->
+      <param name="use_imu" value="$(arg use_imu)" />
+      <param name="invert_acc" value="$(arg invert_imu_acc)" />
+      <param name="invert_gyro" value="$(arg invert_imu_gyro)" />
+      <param name="cool_time_duration" value="2.0" />
+      <!-- robot odometry-based prediction -->
+      <param name="enable_robot_odometry_prediction" value="$(arg enable_robot_odometry_prediction)" />
+      <param name="robot_odom_frame_id" value="$(arg robot_odom_frame_id)" />
+      <!-- ndt settings -->
+      <!-- available reg_methods:FAST_GICP, NDT_OMP, NDT_CUDA_P2D, NDT_CUDA_D2D，FAST_VGICP，GICP，FAST_VGICP,FAST_GICP-->
+      <param name="reg_method" value="NDT_OMP" />
+      <!-- if NDT is slow for your PC, try DIRECT1 serach method, which is a bit unstable but extremely fast -->
+      <param name="ndt_neighbor_search_method" value="KDTREE" />
+      <param name="ndt_neighbor_search_radius" value="2.0" />
+      <param name="ndt_resolution" value="2.0" />
+      <param name="ndt_num_threads" value="6" />
+      <param name="ndt_max_iterations" value="80" />
+      <param name="ndt_transformation_epsilon" value="0.0005" />
+      <param name="ndt_step_size" value="0.05" />
+      <param name="ndt_outlier_ratio" value="0.55" />
+      <param name="enable_frame2frame_ndt" value="$(arg enable_frame2frame_ndt)" />
+      <param name="frame_to_frame_reg_num_threads" value="6" />
+      <param name="frame2frame_reg_method" value="$(arg frame2frame_reg_method)" />
+      <param name="enable_score_weighted_fusion" value="$(arg enable_score_weighted_fusion)" />
+      <!-- 表示分数控制加权，越小加权越高 -->
+      <param name="ndt_score_good" value="0.30" />
+      <param name="ndt_score_bad" value="3.0" />
+      <param name="ndt_score_min_confidence" value="0.05" />
+      <param name="f2f_score_confidence_gain" value="$(arg f2f_score_confidence_gain)" />
+      <!-- lightweight f2f confidence filtering (default off) -->
+      <param name="enable_f2f_confidence_filter" value="false" />
+      <param name="enable_f2f_dynamic_filter" value="false" />
+      <param name="f2f_wall_y_threshold" value="3.0" />
+      <param name="f2f_wall_z_min" value="0.2" />
+      <param name="f2f_wall_z_max" value="3.0" />
+      <param name="f2f_wall_keep_ratio" value="0.4" />
+      <param name="f2f_dynamic_voxel_size" value="0.5" />
+      <param name="f2f_dynamic_keep_ratio" value="0.25" />
+      <param name="f2f_min_filtered_points" value="1000" />
+      <!-- axis prior (1D along centerline, without cross-section area descriptor) -->
+      <param name="enable_axis_prior" value="true" />
+      <param name="axis_centerline_csv" value="/home/scy/catkin_ws_hdl_location/中轴/axis_0416_new5_noalign_centerline.csv" />
+      <param name="axis_profile_csv" value="/home/scy/catkin_ws_hdl_location/中轴/axis_0416_new5_noalign_profile.csv" />
+      <param name="axis_search_window" value="20.0" />
+      <param name="axis_lateral_weight" value="1.0" />
+      <param name="axis_vertical_weight" value="2.0" />
+      <param name="axis_smooth_weight" value="0.05" />
+      <param name="axis_temporal_weight" value="0.2" />
+      <param name="axis_max_lateral" value="20.0" />
+      <!-- <param name="ndt_neighbor_search_radius" value="1.0" />
+      <param name="ndt_resolution" value="0.6" /> -->
+      <!-- 初始0.1，会有个别帧索引溢出的问题 -->
+      <param name="downsample_resolution" value="0.15" />
+          <!-- ======== IMU to base 的四元数 ======== -->
+    <param name="q_imu_to_base/x" value="1.0" />
+    <param name="q_imu_to_base/y" value="0.0" />
+    <param name="q_imu_to_base/z" value="0.0" />
+    <param name="q_imu_to_base/w" value="0.0" />
+
+
+    <!-- ======== IMU to base 的平移 ======== -->
+    <param name="t_imu_to_base/x" value="0.0" />
+    <param name="t_imu_to_base/y" value="0.0" />
+    <param name="t_imu_to_base/z" value="0.0" />
+      <!-- if "specify_init_pose" is true, pose estimator will be initialized with the following params -->
+      <!-- otherwise, you need to input an initial pose with "2D Pose Estimate" on rviz" -->
+      <!--gt地图初始位姿  -->
+    <param name="specify_init_pose" value="true" />
+    <!-- 605s -->
+      <!-- <param name="init_pos_x" value="1472.937134" />
+      <param name="init_pos_y" value="-119.442673" />
+      <param name="init_pos_z" value="-50.079445" />
+      <param name="init_ori_w" value="0.015251" />
+      <param name="init_ori_x" value="-0.026834" />
+      <param name="init_ori_y" value="0.155982" />
+      <param name="init_ori_z" value="-0.987278" /> -->
+<!-- 693s -->
+      <param name="init_pos_x" value="1313.937134" />
+      <param name="init_pos_y" value="-272.442673" />
+      <param name="init_pos_z" value="0.879445" />
+      <param name="init_ori_w" value="0.0066545" />
+      <param name="init_ori_x" value="-0.0086711" />
+      <param name="init_ori_y" value="0.0233589" />
+      <param name="init_ori_z" value="-0.990639" />
+
+      <!-- 837s -->
+      <!-- <param name="init_pos_x" value="1100.937134" />
+      <param name="init_pos_y" value="-132.442673" />
+      <param name="init_pos_z" value="-35.079445" />
+      <param name="init_ori_w" value="0.015251" />
+      <param name="init_ori_x" value="-0.026834" />
+      <param name="init_ori_y" value="0.155982" />
+      <param name="init_ori_z" value="-0.987278" /> -->
+
+
+      <!-- 912s -->
+      <!-- <param name="init_pos_x" value="1100.937134" />
+      <param name="init_pos_y" value="-132.442673" />
+      <param name="init_pos_z" value="-35.079445" />
+      <param name="init_ori_w" value="0.015251" />
+      <param name="init_ori_x" value="-0.026834" />
+      <param name="init_ori_y" value="0.155982" />
+      <param name="init_ori_z" value="-0.987278" /> -->
+
+      <param name="use_global_localization" value="$(arg use_global_localization)" />
+    </node>
+<!-- 修改 -->
+    <node pkg="hdl_localization" type="plot_status.py" name="plot_estimation_errors" if="$(arg plot_estimation_errors)" />
+
+    <!-- <node pkg="hdl_localization" type="plot_status_modified.py" name="plot_estimation_errors" if="$(arg plot_estimation_errors)" /> -->
+</launch>

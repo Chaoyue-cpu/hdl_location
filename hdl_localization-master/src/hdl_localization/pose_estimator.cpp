@@ -4,10 +4,13 @@
 #include <cctype>
 #include <cstdint>
 #include <cmath>
+#include <fstream>
 #include <limits>
+#include <sstream>
 #include <unordered_set>
 
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/common/transforms.h>
 #include <pclomp/ndt_omp.h>
 #include <fast_gicp/gicp/fast_gicp.hpp>
 #include <fast_gicp/gicp/impl/fast_gicp_impl.hpp>
@@ -75,7 +78,16 @@ PoseEstimator::PoseEstimator(
   double f2f_wall_keep_ratio,
   double f2f_dynamic_voxel_size,
   double f2f_dynamic_keep_ratio,
-  int f2f_min_filtered_points)
+  int f2f_min_filtered_points,
+  bool enable_axis_prior,
+  const std::string& axis_centerline_csv,
+  const std::string& axis_profile_csv,
+  double axis_search_window,
+  double axis_lateral_weight,
+  double axis_vertical_weight,
+  double axis_smooth_weight,
+  double axis_temporal_weight,
+  double axis_max_lateral)
 : registration(registration),
   cool_time_duration(cool_time_duration),
   enable_frame2frame_ndt(enable_frame2frame_ndt),
@@ -97,9 +109,14 @@ PoseEstimator::PoseEstimator(
   f2f_dynamic_voxel_size(std::max(0.05, f2f_dynamic_voxel_size)),
   f2f_dynamic_keep_ratio(std::max(0.0, std::min(1.0, f2f_dynamic_keep_ratio))),
   f2f_min_filtered_points(std::max(50, f2f_min_filtered_points)),
-  prev_map_pose(Eigen::Matrix4f::Identity()),
-  pure_f2f_initialized(false),
-  pure_f2f_global_pose(Eigen::Matrix4f::Identity()) {
+  enable_axis_prior(enable_axis_prior),
+  axis_search_window(std::max(1.0, axis_search_window)),
+  axis_lateral_weight(std::max(0.0, axis_lateral_weight)),
+  axis_vertical_weight(std::max(0.0, axis_vertical_weight)),
+  axis_smooth_weight(std::max(0.0, axis_smooth_weight)),
+  axis_temporal_weight(std::max(0.0, axis_temporal_weight)),
+  axis_max_lateral(std::max(0.5, axis_max_lateral)),
+  prev_map_pose(Eigen::Matrix4f::Identity()) {
   // 初始化最后一次观测的变换矩阵（4x4单位矩阵）
   last_observation = Eigen::Matrix4f::Identity();
 
@@ -193,6 +210,19 @@ PoseEstimator::PoseEstimator(
     frame2frame_registration = ndt;
     ROS_INFO_STREAM("frame-to-frame registration: NDT_OMP");
   }
+
+  if (enable_axis_prior) {
+    const bool ok_centerline = load_axis_centerline_csv(axis_centerline_csv);
+    const bool ok_profile = load_axis_profile_csv(axis_profile_csv);
+    if (!ok_centerline) {
+      ROS_WARN_STREAM("axis prior disabled: failed to load centerline csv: " << axis_centerline_csv);
+      this->enable_axis_prior = false;
+    } else if (!ok_profile) {
+      ROS_WARN_STREAM("axis profile csv missing or invalid, axis prior will use XY only: " << axis_profile_csv);
+    } else {
+      ROS_INFO_STREAM("axis prior loaded: centerline_samples=" << axis_centerline.size() << " profile_samples=" << axis_profile.size());
+    }
+  }
 }
 
 PoseEstimator::~PoseEstimator() {}
@@ -238,6 +268,257 @@ bool PoseEstimator::keep_point_by_ratio(const PointT& pt, double keep_ratio, int
 
   const double u = static_cast<double>(h) / static_cast<double>(std::numeric_limits<std::uint32_t>::max());
   return u <= keep_ratio;
+}
+
+bool PoseEstimator::load_axis_centerline_csv(const std::string& path) {
+  axis_centerline.clear();
+  if (path.empty()) {
+    return false;
+  }
+
+  std::ifstream ifs(path);
+  if (!ifs.good()) {
+    return false;
+  }
+
+  std::string line;
+  while (std::getline(ifs, line)) {
+    if (line.empty() || line[0] == '#') {
+      continue;
+    }
+    if (line.find("s,") != std::string::npos) {
+      continue;
+    }
+
+    std::stringstream ss(line);
+    std::string cell;
+    std::vector<std::string> cols;
+    while (std::getline(ss, cell, ',')) {
+      cols.emplace_back(cell);
+    }
+    if (cols.size() < 4) {
+      continue;
+    }
+
+    AxisSample sample;
+    try {
+      sample.s = std::stod(cols[0]);
+      sample.p.x() = static_cast<float>(std::stod(cols[1]));
+      sample.p.y() = static_cast<float>(std::stod(cols[2]));
+      sample.p.z() = static_cast<float>(std::stod(cols[3]));
+    } catch (...) {
+      continue;
+    }
+    axis_centerline.emplace_back(sample);
+  }
+
+  if (axis_centerline.size() < 2) {
+    axis_centerline.clear();
+    return false;
+  }
+
+  std::sort(axis_centerline.begin(), axis_centerline.end(), [](const AxisSample& a, const AxisSample& b) { return a.s < b.s; });
+  return true;
+}
+
+bool PoseEstimator::load_axis_profile_csv(const std::string& path) {
+  axis_profile.clear();
+  if (path.empty()) {
+    return false;
+  }
+
+  std::ifstream ifs(path);
+  if (!ifs.good()) {
+    return false;
+  }
+
+  std::string line;
+  while (std::getline(ifs, line)) {
+    if (line.empty() || line[0] == '#') {
+      continue;
+    }
+    if (line.find("s,") != std::string::npos) {
+      continue;
+    }
+
+    std::stringstream ss(line);
+    std::string cell;
+    std::vector<std::string> cols;
+    while (std::getline(ss, cell, ',')) {
+      cols.emplace_back(cell);
+    }
+    if (cols.size() < 3) {
+      continue;
+    }
+
+    AxisZSample sample;
+    try {
+      sample.s = std::stod(cols[0]);
+      sample.z = std::stod(cols[2]);  // z_centerline
+    } catch (...) {
+      continue;
+    }
+    axis_profile.emplace_back(sample);
+  }
+
+  if (axis_profile.empty()) {
+    return false;
+  }
+
+  std::sort(axis_profile.begin(), axis_profile.end(), [](const AxisZSample& a, const AxisZSample& b) { return a.s < b.s; });
+  return true;
+}
+
+bool PoseEstimator::interpolate_axis_sample(double s, Eigen::Vector3f* point, Eigen::Vector3f* tangent) const {
+  if (axis_centerline.size() < 2 || !point || !tangent) {
+    return false;
+  }
+
+  if (s <= axis_centerline.front().s) {
+    const Eigen::Vector3f t = (axis_centerline[1].p - axis_centerline[0].p).normalized();
+    *point = axis_centerline.front().p;
+    *tangent = t;
+    return true;
+  }
+  if (s >= axis_centerline.back().s) {
+    const std::size_t n = axis_centerline.size();
+    const Eigen::Vector3f t = (axis_centerline[n - 1].p - axis_centerline[n - 2].p).normalized();
+    *point = axis_centerline.back().p;
+    *tangent = t;
+    return true;
+  }
+
+  const auto it = std::lower_bound(axis_centerline.begin(), axis_centerline.end(), s, [](const AxisSample& a, double v) { return a.s < v; });
+  const std::size_t hi = static_cast<std::size_t>(it - axis_centerline.begin());
+  const std::size_t lo = hi - 1;
+  const double ds = std::max(axis_centerline[hi].s - axis_centerline[lo].s, 1e-6);
+  const double r = (s - axis_centerline[lo].s) / ds;
+  *point = static_cast<float>(1.0 - r) * axis_centerline[lo].p + static_cast<float>(r) * axis_centerline[hi].p;
+  *tangent = (axis_centerline[hi].p - axis_centerline[lo].p).normalized();
+  return true;
+}
+
+bool PoseEstimator::interpolate_axis_z(double s, double* z) const {
+  if (!z || axis_profile.empty()) {
+    return false;
+  }
+
+  if (s <= axis_profile.front().s) {
+    *z = axis_profile.front().z;
+    return true;
+  }
+  if (s >= axis_profile.back().s) {
+    *z = axis_profile.back().z;
+    return true;
+  }
+
+  const auto it = std::lower_bound(axis_profile.begin(), axis_profile.end(), s, [](const AxisZSample& a, double v) { return a.s < v; });
+  const std::size_t hi = static_cast<std::size_t>(it - axis_profile.begin());
+  const std::size_t lo = hi - 1;
+  const double ds = std::max(axis_profile[hi].s - axis_profile[lo].s, 1e-6);
+  const double r = (s - axis_profile[lo].s) / ds;
+  *z = (1.0 - r) * axis_profile[lo].z + r * axis_profile[hi].z;
+  return true;
+}
+
+bool PoseEstimator::project_to_axis(const Eigen::Vector3f& p, double* s, double* lateral_distance) const {
+  if (axis_centerline.size() < 2 || !s || !lateral_distance) {
+    return false;
+  }
+
+  double best_d2 = std::numeric_limits<double>::max();
+  double best_s = axis_centerline.front().s;
+
+  for (std::size_t i = 0; i + 1 < axis_centerline.size(); ++i) {
+    const Eigen::Vector3f a = axis_centerline[i].p;
+    const Eigen::Vector3f b = axis_centerline[i + 1].p;
+    Eigen::Vector2f ab = (b - a).head<2>();
+    const float l2 = ab.squaredNorm();
+    if (l2 < 1e-9f) {
+      continue;
+    }
+
+    Eigen::Vector2f ap = (p - a).head<2>();
+    float t = ap.dot(ab) / l2;
+    t = std::max(0.0f, std::min(1.0f, t));
+    const Eigen::Vector2f proj = a.head<2>() + t * ab;
+    const Eigen::Vector2f diff = p.head<2>() - proj;
+    const double d2 = static_cast<double>(diff.squaredNorm());
+    if (d2 < best_d2) {
+      best_d2 = d2;
+      const double seg_s = axis_centerline[i].s + static_cast<double>(t) * (axis_centerline[i + 1].s - axis_centerline[i].s);
+      best_s = seg_s;
+    }
+  }
+
+  *s = best_s;
+  *lateral_distance = std::sqrt(std::max(0.0, best_d2));
+  return true;
+}
+
+Eigen::Matrix4f PoseEstimator::apply_axis_prior(const Eigen::Matrix4f& pose, const char* stage) {
+  if (!enable_axis_prior || axis_centerline.size() < 2) {
+    return pose;
+  }
+
+  Eigen::Matrix4f adjusted = pose;
+  const Eigen::Vector3f p = pose.block<3, 1>(0, 3);
+
+  double s_ref = 0.0;
+  double lateral = 0.0;
+  if (!project_to_axis(p, &s_ref, &lateral)) {
+    return pose;
+  }
+  if (lateral > axis_max_lateral) {
+    ROS_WARN_STREAM_THROTTLE(1.0, "[AXIS] skip prior at " << stage << " due to large lateral distance: " << lateral);
+    return pose;
+  }
+
+  const double s_min = std::max(axis_centerline.front().s, s_ref - axis_search_window);
+  const double s_max = std::min(axis_centerline.back().s, s_ref + axis_search_window);
+
+  double best_s = s_ref;
+  double best_cost = std::numeric_limits<double>::max();
+  for (const auto& sample : axis_centerline) {
+    if (sample.s < s_min || sample.s > s_max) {
+      continue;
+    }
+
+    const Eigen::Vector2f dxy = p.head<2>() - sample.p.head<2>();
+    double cost = axis_lateral_weight * static_cast<double>(dxy.squaredNorm());
+    const double ds_ref = sample.s - s_ref;
+    cost += axis_smooth_weight * ds_ref * ds_ref;
+
+    if (!axis_profile.empty()) {
+      double z_model = sample.p.z();
+      interpolate_axis_z(sample.s, &z_model);
+      const double dz = static_cast<double>(p.z()) - z_model;
+      cost += axis_vertical_weight * dz * dz;
+    }
+
+    if (last_axis_s) {
+      const double ds_t = sample.s - *last_axis_s;
+      cost += axis_temporal_weight * ds_t * ds_t;
+    }
+
+    if (cost < best_cost) {
+      best_cost = cost;
+      best_s = sample.s;
+    }
+  }
+
+  const double delta_s = best_s - s_ref;
+  Eigen::Vector3f axis_point;
+  Eigen::Vector3f axis_tangent;
+  if (!interpolate_axis_sample(s_ref, &axis_point, &axis_tangent)) {
+    return pose;
+  }
+  adjusted.block<3, 1>(0, 3) = p + static_cast<float>(delta_s) * axis_tangent;
+  last_axis_s = best_s;
+
+  ROS_INFO_STREAM_THROTTLE(0.5, "[AXIS] " << stage << " s_ref=" << s_ref << " s_best=" << best_s << " delta_s=" << delta_s
+                                           << " lateral=" << lateral << " cost=" << best_cost);
+  return adjusted;
 }
 
 bool PoseEstimator::compute_f2f_absolute_pose(
@@ -569,15 +850,32 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
     init_guess.block<3, 3>(0, 0) = Eigen::Quaternionf(fused_mean[3], fused_mean[4], fused_mean[5], fused_mean[6]).normalized().toRotationMatrix();  // 姿态
   }
 
-  // 配准对齐点云 cloud 到地图坐标系，使用 init_guess 作为初始估计
+  // 先用帧间配准提供地图配准初值（若不可用则退回IMU/Odom初值）
+  Eigen::Matrix4f map_init_guess = init_guess;
+  Eigen::Matrix4f f2f_init_pose = Eigen::Matrix4f::Identity();
+  double f2f_init_score = std::numeric_limits<double>::quiet_NaN();
+  const bool has_f2f_init = compute_f2f_absolute_pose(cloud, init_guess, &f2f_init_pose, &f2f_init_score);
+  if (has_f2f_init) {
+    map_init_guess = f2f_init_pose;
+  }
+  map_init_guess = apply_axis_prior(map_init_guess, "prealign");
+
+  // 配准对齐点云 cloud 到地图坐标系，使用 map_init_guess 作为初始估计
   pcl::PointCloud<PointT>::Ptr aligned(new pcl::PointCloud<PointT>());
+  if (!reg->getInputTarget()) {
+    ROS_WARN_STREAM_THROTTLE(1.0, "[REG] target map is not ready, skip correction");
+    pcl::transformPointCloud(*cloud, *aligned, map_init_guess);
+    aligned->header = cloud->header;
+    return aligned;
+  }
+
   // 当前帧雷达点云
   reg->setInputSource(cloud);
   // ====== 开始计时 ======
   auto t0w = std::chrono::steady_clock::now();
   double t0c = now_thread_cpu_ms();
 
-  reg->align(*aligned, init_guess);
+  reg->align(*aligned, map_init_guess);
 
   // ====== 结束计时 ======
   auto t1w = std::chrono::steady_clock::now();
@@ -585,48 +883,38 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
 
   double wall = std::chrono::duration<double, std::milli>(t1w - t0w).count();
   double cpu = t1c - t0c;
-  std::cout << "[GICP] wall=" << wall << " ms, cpu=" << cpu << " ms\n";
+  std::cout << "[REG] wall=" << wall << " ms, cpu=" << cpu << " ms\n";
   // // solver.iterations()
-  std::cout << " conv=" << reg->hasConverged() << std::endl;
+  const bool map_converged = reg->hasConverged();
+  std::cout << " conv=" << map_converged << std::endl;
 
-  // 提取帧到地图位姿（地图观测）
+  if (!map_converged) {
+    ROS_WARN_STREAM_THROTTLE(1.0, "[REG] map registration did not converge, keep predicted pose");
+    pcl::transformPointCloud(*cloud, *aligned, map_init_guess);
+    aligned->header = cloud->header;
+
+    last_observation = map_init_guess;
+    wo_pred_error = no_guess.inverse() * map_init_guess;
+    imu_pred_error = imu_guess.inverse() * map_init_guess;
+    if (odom_ukf) {
+      odom_pred_error = odom_guess.inverse() * map_init_guess;
+      imu_odom_pred_error = init_guess.inverse() * map_init_guess;
+    }
+
+    prev_cloud = cloud;
+    prev_map_pose = map_init_guess;
+    return aligned;
+  }
+
+  // 提取帧到地图位姿（观测值仅使用map配准结果）
   Eigen::Matrix4f map_pose = reg->getFinalTransformation();
   const double map_fitness_score = reg->getFitnessScore();
-  Eigen::Matrix4f fused_pose = map_pose;
-  Eigen::Matrix4f f2f_pose = Eigen::Matrix4f::Identity();
-  double f2f_fitness_score = std::numeric_limits<double>::quiet_NaN();
-  const bool has_f2f_pose = compute_f2f_absolute_pose(cloud, init_guess, &f2f_pose, &f2f_fitness_score);
-  if (has_f2f_pose) {
-    fused_pose = fuse_map_and_f2f_pose(map_pose, f2f_pose, map_fitness_score, f2f_fitness_score);
-  }
-
-  bool pure_f2f_anchor_frame = false;
-  bool pure_f2f_step_converged = false;
-  double pure_f2f_step_score = std::numeric_limits<double>::quiet_NaN();
-  bool pure_f2f_available = false;
-  if (!pure_f2f_initialized) {
-    // Anchor only once with the first global pose, then keep chaining frame-to-frame only.
-    pure_f2f_global_pose = map_pose;
-    pure_f2f_initialized = true;
-    pure_f2f_anchor_frame = true;
-    pure_f2f_available = true;
-  } else if (frame2frame_registration && prev_cloud) {
-    pcl::PointCloud<PointT> pure_f2f_aligned;
-    frame2frame_registration->setInputTarget(prev_cloud);
-    frame2frame_registration->setInputSource(cloud);
-    frame2frame_registration->align(pure_f2f_aligned, Eigen::Matrix4f::Identity());
-    pure_f2f_step_converged = frame2frame_registration->hasConverged();
-    if (pure_f2f_step_converged) {
-      pure_f2f_global_pose = pure_f2f_global_pose * frame2frame_registration->getFinalTransformation();
-      pure_f2f_step_score = frame2frame_registration->getFitnessScore();
-    }
-    pure_f2f_available = true;
-  }
+  const Eigen::Matrix4f final_pose = apply_axis_prior(map_pose, "postalign");
   // std::cout << "[TRANSFORM] Current frame pose:" << std::endl;
   // std::cout << trans << std::endl;
 
-  Eigen::Vector3f p = fused_pose.block<3, 1>(0, 3);    // 平移
-  Eigen::Quaternionf q(fused_pose.block<3, 3>(0, 0));  // 姿态
+  Eigen::Vector3f p = final_pose.block<3, 1>(0, 3);    // 平移
+  Eigen::Quaternionf q(final_pose.block<3, 3>(0, 0));  // 姿态
 
   // 确保四元数方向一致（避免跳变）
   if (quat().coeffs().dot(q.coeffs()) < 0.0f) {
@@ -634,50 +922,26 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   }
 
   ROS_INFO_STREAM(
-    "[GICP] fused pose p=[" << p.x() << ", " << p.y() << ", " << p.z() << "] "
-                            << "q=[w " << q.w() << ", x " << q.x() << ", y " << q.y() << ", z " << q.z() << "] "
-                            << "f2f_used=" << (has_f2f_pose ? "true" : "false") << " map_score=" << map_fitness_score << " f2f_score=" << f2f_fitness_score);
-
-  if (pure_f2f_available) {
-    const Eigen::Vector3f p_pure_f2f = pure_f2f_global_pose.block<3, 1>(0, 3);
-    const Eigen::Quaternionf q_pure_f2f(pure_f2f_global_pose.block<3, 3>(0, 0));
-
-    const Eigen::Matrix4f pure_f2f_to_fused = pure_f2f_global_pose.inverse() * fused_pose;
-    const Eigen::Vector3f delta_t = pure_f2f_to_fused.block<3, 1>(0, 3);
-    const double delta_t_norm = delta_t.norm();
-    Eigen::Quaternionf delta_q(pure_f2f_to_fused.block<3, 3>(0, 0));
-    delta_q.normalize();
-    const double delta_angle_rad = 2.0 * std::acos(std::max(-1.0, std::min(1.0, static_cast<double>(std::abs(delta_q.w())))));
-    const double delta_angle_deg = delta_angle_rad * 57.29577951308232;
-
-    ROS_INFO_STREAM(
-      "[POSE_COMPARE] pure_f2f_global p=[" << p_pure_f2f.x() << ", " << p_pure_f2f.y() << ", " << p_pure_f2f.z() << "] "
-                                           << "q=[w " << q_pure_f2f.w() << ", x " << q_pure_f2f.x() << ", y " << q_pure_f2f.y() << ", z " << q_pure_f2f.z() << "] "
-                                           << "anchor_frame=" << (pure_f2f_anchor_frame ? "true" : "false") << " step_converged=" << (pure_f2f_step_converged ? "true" : "false")
-                                           << " step_score=" << pure_f2f_step_score << " "
-                                           << "vs fused: delta_t=[" << delta_t.x() << ", " << delta_t.y() << ", " << delta_t.z() << "] "
-                                           << "|delta_t|=" << delta_t_norm << "m"
-                                           << " delta_rot=" << delta_angle_deg << "deg");
-  } else {
-    ROS_INFO_STREAM("[POSE_COMPARE] pure_f2f_global unavailable in this frame, compare skipped");
-  }
+    "[REG] map pose p=[" << p.x() << ", " << p.y() << ", " << p.z() << "] "
+                         << "q=[w " << q.w() << ", x " << q.x() << ", y " << q.y() << ", z " << q.z() << "] "
+                         << "f2f_init_used=" << (has_f2f_init ? "true" : "false") << " map_score=" << map_fitness_score << " f2f_init_score=" << f2f_init_score);
 
   // 构造观测向量 observation（位置+四元数，共7维）,已 修正四元数正负
   Eigen::VectorXf observation(7);
   observation.middleRows(0, 3) = p;
   observation.middleRows(3, 4) = Eigen::Vector4f(q.w(), q.x(), q.y(), q.z());
 
-  // 保存最新融合后的观测结果
-  last_observation = fused_pose;
+  // 保存最新观测结果（map配准）
+  last_observation = final_pose;
 
-  // 记录预测误差（基于融合观测）
-  wo_pred_error = no_guess.inverse() * fused_pose;
+  // 记录预测误差（基于map观测）
+  wo_pred_error = no_guess.inverse() * final_pose;
 
   // 执行UKF状态更新（修正）
   ukf->correct(observation);
 
   // 记录IMU预测误差
-  imu_pred_error = imu_guess.inverse() * fused_pose;
+  imu_pred_error = imu_guess.inverse() * final_pose;
 
   // 如果有odom_ukf，进行里程计UKF的修正
   if (odom_ukf) {
@@ -690,13 +954,13 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
     odom_ukf->correct(observation);
 
     // 记录里程计预测误差
-    odom_pred_error = odom_guess.inverse() * fused_pose;
-    // 记录融合误差
-    imu_odom_pred_error = init_guess.inverse() * fused_pose;
+    odom_pred_error = odom_guess.inverse() * final_pose;
+    // 记录预测初值误差
+    imu_odom_pred_error = init_guess.inverse() * final_pose;
   }
 
   prev_cloud = cloud;
-  prev_map_pose = fused_pose;
+  prev_map_pose = final_pose;
 
   // 返回配准后的点云
   return aligned;
