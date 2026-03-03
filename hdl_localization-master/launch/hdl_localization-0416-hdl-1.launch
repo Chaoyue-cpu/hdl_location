@@ -57,16 +57,16 @@
 <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/DLO_half_keyframe11_0.05resolution.pcd" /> -->
 
 <param name="globalmap_pcd" value="/media/scy/新加卷/数据集/locus多个地下矿井/真值/_ground_truth-20250124T153559Z-001/_ground_truth/D_Tunnel_Husky4_gt/h4_sr2_gt_map.pcd" />
-<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/0805/ours--optimized-2/pointcloud_map_metadata.yaml" />
-<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/0805/ours--optimized-2/pointcloud_map.pcd" />    
+<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/0805/hdl/pointcloud_map_metadata.yaml" />
+<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/0805/hdl/pointcloud_map.pcd" />    
       <param name="convert_utm_to_local" value="true" />
-      <param name="downsample_resolution" value="0.1" />
+      <param name="downsample_resolution" value="0.3" />
     </node>
 
     <!-- hdl_localization_nodelet -->
     <node pkg="nodelet" type="nodelet" name="hdl_localization_nodelet" args="load hdl_localization/HdlLocalizationNodelet $(arg nodelet_manager)">
      <!-- 地图参数 -->
-      <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/0805/ours--optimized-2/pointcloud_map_metadata.yaml" />
+      <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/0805/hdl/pointcloud_map_metadata.yaml" />
       <param name="tile_radius" value="1" />   <!-- 1=3x3, 2=5x5 -->
 <param name="time_offset_lidar_to_imu" value="0.0" />
 
@@ -137,8 +137,8 @@
       <param name="init_ori_y" value="0.155982" />
       <param name="init_ori_z" value="-0.987278" /> -->
 <!-- 693s -->
-      <param name="init_pos_x" value="1244.937134" />
-      <param name="init_pos_y" value="-127.442673" />
+      <param name="init_pos_x" value="1234.937134" />
+      <param name="init_pos_y" value="-190.442673" />
       <param name="init_pos_z" value="-40.079445" />
       <param name="init_ori_w" value="0.022545" />
       <param name="init_ori_x" value="-0.016711" />

@@ -13,13 +13,13 @@
   <arg name="use_imu" default="true" />
   <arg name="invert_imu_acc" default="false" />
   <arg name="invert_imu_gyro" default="false" />
-  <arg name="use_global_localization" default="false" />
+  <arg name="use_global_localization" default="true" />
   <arg name="imu_topic" default="/localization/imu" />
   <arg name="enable_frame2frame_ndt" default="true" />
   <!-- NDT_OMP,FAST_GICP -->
   <arg name="frame2frame_reg_method" default="FAST_GICP" />
   <arg name="enable_score_weighted_fusion" default="true" />
-  <arg name="f2f_score_confidence_gain" default="2.0" />
+  <arg name="f2f_score_confidence_gain" default="10.0" />
   <arg name="enable_robot_odometry_prediction" value="false" />
   <arg name="robot_odom_frame_id" value="odom" />
   <arg name="plot_estimation_errors" value="false" />
@@ -62,7 +62,7 @@
       <param name="convert_utm_to_local" value="true" />
       <!-- ndt0.1 -->
       <!-- <param name="downsample_resolution" value="0.1" /> -->
-            <param name="downsample_resolution" value="0.15" />
+            <param name="downsample_resolution" value="0.2" />
 
     </node>
 
@@ -108,8 +108,8 @@
       <param name="ndt_score_min_confidence" value="0.05" />
       <param name="f2f_score_confidence_gain" value="$(arg f2f_score_confidence_gain)" />
       <!-- lightweight f2f confidence filtering (default off) -->
-      <param name="enable_f2f_confidence_filter" value="false" />
-      <param name="enable_f2f_dynamic_filter" value="false" />
+      <param name="enable_f2f_confidence_filter" value="true" />
+      <param name="enable_f2f_dynamic_filter" value="true" />
       <param name="f2f_wall_y_threshold" value="3.0" />
       <param name="f2f_wall_z_min" value="0.2" />
       <param name="f2f_wall_z_max" value="3.0" />
