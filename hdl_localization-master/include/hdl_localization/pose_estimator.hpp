@@ -54,6 +54,9 @@ public:
     double ndt_score_bad = 1.5,
     double ndt_score_min_confidence = 0.05,
     double f2f_score_confidence_gain = 1.0,
+    bool enable_axis_anisotropic_fusion = false,
+    double f2f_axial_conf_gain = 2.0,
+    double f2f_nonaxial_conf_gain = 0.5,
     bool enable_f2f_confidence_filter = false,
     bool enable_f2f_dynamic_filter = false,
     double f2f_wall_y_threshold = 3.0,
@@ -128,7 +131,17 @@ private:
   bool is_wall_point(const PointT& pt) const;
   bool keep_point_by_ratio(const PointT& pt, double keep_ratio, int salt) const;
   bool compute_f2f_absolute_pose(const pcl::PointCloud<PointT>::ConstPtr& cloud, const Eigen::Matrix4f& init_guess, Eigen::Matrix4f* f2f_absolute_pose, double* f2f_fitness_score);
-  Eigen::Matrix4f fuse_map_and_f2f_pose(const Eigen::Matrix4f& map_pose, const Eigen::Matrix4f& f2f_pose, double map_fitness_score, double f2f_fitness_score) const;
+  Eigen::Matrix4f fuse_map_and_f2f_pose(
+    const Eigen::Matrix4f& map_pose,
+    const Eigen::Matrix4f& f2f_pose,
+    double map_fitness_score,
+    double f2f_fitness_score,
+    double* out_map_conf = nullptr,
+    double* out_f2f_conf = nullptr,
+    double* out_w_f2f_trans = nullptr,
+    double* out_w_f2f_rot = nullptr,
+    double* out_w_f2f_axial = nullptr,
+    double* out_w_f2f_nonaxial = nullptr) const;
   double score_to_confidence(double score) const;
   bool load_axis_centerline_csv(const std::string& path);
   bool load_axis_profile_csv(const std::string& path);
@@ -165,6 +178,9 @@ private:
   double ndt_score_bad;
   double ndt_score_min_confidence;
   double f2f_score_confidence_gain;
+  bool enable_axis_anisotropic_fusion;
+  double f2f_axial_conf_gain;
+  double f2f_nonaxial_conf_gain;
   bool enable_f2f_confidence_filter;
   bool enable_f2f_dynamic_filter;
   double f2f_wall_y_threshold;

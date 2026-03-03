@@ -70,6 +70,9 @@ PoseEstimator::PoseEstimator(
   double ndt_score_bad,
   double ndt_score_min_confidence,
   double f2f_score_confidence_gain,
+  bool enable_axis_anisotropic_fusion,
+  double f2f_axial_conf_gain,
+  double f2f_nonaxial_conf_gain,
   bool enable_f2f_confidence_filter,
   bool enable_f2f_dynamic_filter,
   double f2f_wall_y_threshold,
@@ -103,6 +106,9 @@ PoseEstimator::PoseEstimator(
   ndt_score_bad(ndt_score_bad),
   ndt_score_min_confidence(ndt_score_min_confidence),
   f2f_score_confidence_gain(std::max(0.0, f2f_score_confidence_gain)),
+  enable_axis_anisotropic_fusion(enable_axis_anisotropic_fusion),
+  f2f_axial_conf_gain(std::max(0.0, f2f_axial_conf_gain)),
+  f2f_nonaxial_conf_gain(std::max(0.0, f2f_nonaxial_conf_gain)),
   enable_f2f_confidence_filter(enable_f2f_confidence_filter),
   enable_f2f_dynamic_filter(enable_f2f_dynamic_filter),
   f2f_wall_y_threshold(std::max(0.0, f2f_wall_y_threshold)),
@@ -648,7 +654,17 @@ double PoseEstimator::score_to_confidence(double score) const {
   return min_conf + (1.0 - min_conf) * normalized;
 }
 
-Eigen::Matrix4f PoseEstimator::fuse_map_and_f2f_pose(const Eigen::Matrix4f& map_pose, const Eigen::Matrix4f& f2f_pose, double map_fitness_score, double f2f_fitness_score) const {
+Eigen::Matrix4f PoseEstimator::fuse_map_and_f2f_pose(
+  const Eigen::Matrix4f& map_pose,
+  const Eigen::Matrix4f& f2f_pose,
+  double map_fitness_score,
+  double f2f_fitness_score,
+  double* out_map_conf,
+  double* out_f2f_conf,
+  double* out_w_f2f_trans,
+  double* out_w_f2f_rot,
+  double* out_w_f2f_axial,
+  double* out_w_f2f_nonaxial) const {
   const double map_trans_var = std::max(map_trans_noise * map_trans_noise, 1e-9);
   const double f2f_trans_var = std::max(f2f_trans_noise * f2f_trans_noise, 1e-9);
   const double map_rot_var = std::max(map_rot_noise * map_rot_noise, 1e-9);
@@ -671,7 +687,31 @@ Eigen::Matrix4f PoseEstimator::fuse_map_and_f2f_pose(const Eigen::Matrix4f& map_
 
   const Eigen::Vector3f p_map = map_pose.block<3, 1>(0, 3);
   const Eigen::Vector3f p_f2f = f2f_pose.block<3, 1>(0, 3);
-  const Eigen::Vector3f p_fused = (1.0 - w_f2f_trans) * p_map + w_f2f_trans * p_f2f;
+  double w_f2f_axial = w_f2f_trans;
+  double w_f2f_nonaxial = w_f2f_trans;
+  Eigen::Vector3f p_fused = (1.0 - w_f2f_trans) * p_map + w_f2f_trans * p_f2f;
+
+  if (enable_axis_anisotropic_fusion && enable_axis_prior && axis_centerline.size() >= 2) {
+    double s_ref = 0.0;
+    double lateral = 0.0;
+    if (project_to_axis(p_map, &s_ref, &lateral)) {
+      Eigen::Vector3f axis_point = Eigen::Vector3f::Zero();
+      Eigen::Vector3f axis_tangent = Eigen::Vector3f::UnitX();
+      if (interpolate_axis_sample(s_ref, &axis_point, &axis_tangent) && axis_tangent.norm() > 1e-6f) {
+        axis_tangent.normalize();
+        const Eigen::Vector3f delta = p_f2f - p_map;
+        const Eigen::Vector3f delta_axial = delta.dot(axis_tangent) * axis_tangent;
+        const Eigen::Vector3f delta_nonaxial = delta - delta_axial;
+
+        const double inv_f2f_axial = (f2f_conf * f2f_axial_conf_gain) / f2f_trans_var;
+        const double inv_f2f_nonaxial = (f2f_conf * f2f_nonaxial_conf_gain) / f2f_trans_var;
+        w_f2f_axial = inv_f2f_axial / std::max(inv_map_trans + inv_f2f_axial, 1e-9);
+        w_f2f_nonaxial = inv_f2f_nonaxial / std::max(inv_map_trans + inv_f2f_nonaxial, 1e-9);
+
+        p_fused = p_map + static_cast<float>(w_f2f_axial) * delta_axial + static_cast<float>(w_f2f_nonaxial) * delta_nonaxial;
+      }
+    }
+  }
 
   Eigen::Quaternionf q_map(map_pose.block<3, 3>(0, 0));
   Eigen::Quaternionf q_f2f(f2f_pose.block<3, 3>(0, 0));
@@ -683,6 +723,26 @@ Eigen::Matrix4f PoseEstimator::fuse_map_and_f2f_pose(const Eigen::Matrix4f& map_
   Eigen::Matrix4f fused = Eigen::Matrix4f::Identity();
   fused.block<3, 1>(0, 3) = p_fused;
   fused.block<3, 3>(0, 0) = q_fused.toRotationMatrix();
+
+  if (out_map_conf) {
+    *out_map_conf = map_conf;
+  }
+  if (out_f2f_conf) {
+    *out_f2f_conf = f2f_conf;
+  }
+  if (out_w_f2f_trans) {
+    *out_w_f2f_trans = w_f2f_trans;
+  }
+  if (out_w_f2f_rot) {
+    *out_w_f2f_rot = w_f2f_rot;
+  }
+  if (out_w_f2f_axial) {
+    *out_w_f2f_axial = w_f2f_axial;
+  }
+  if (out_w_f2f_nonaxial) {
+    *out_w_f2f_nonaxial = w_f2f_nonaxial;
+  }
+
   return fused;
 }
 /**
@@ -937,24 +997,21 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   double f2f_conf = 0.0;
   double w_f2f_trans = 0.0;
   double w_f2f_rot = 0.0;
+  double w_f2f_axial = 0.0;
+  double w_f2f_nonaxial = 0.0;
   if (has_f2f_init) {
-    selected_pose = fuse_map_and_f2f_pose(map_pose, f2f_init_pose, map_fitness_score, f2f_init_score);
+    selected_pose = fuse_map_and_f2f_pose(
+      map_pose,
+      f2f_init_pose,
+      map_fitness_score,
+      f2f_init_score,
+      &map_conf,
+      &f2f_conf,
+      &w_f2f_trans,
+      &w_f2f_rot,
+      &w_f2f_axial,
+      &w_f2f_nonaxial);
     pose_source = "fused_map_f2f";
-
-    const double map_trans_var = std::max(map_trans_noise * map_trans_noise, 1e-9);
-    const double f2f_trans_var = std::max(f2f_trans_noise * f2f_trans_noise, 1e-9);
-    const double map_rot_var = std::max(map_rot_noise * map_rot_noise, 1e-9);
-    const double f2f_rot_var = std::max(f2f_rot_noise * f2f_rot_noise, 1e-9);
-
-    map_conf = enable_score_weighted_fusion ? score_to_confidence(map_fitness_score) : 1.0;
-    f2f_conf = enable_score_weighted_fusion ? score_to_confidence(f2f_init_score) * f2f_score_confidence_gain : 1.0;
-
-    const double inv_map_trans = map_conf / map_trans_var;
-    const double inv_f2f_trans = f2f_conf / f2f_trans_var;
-    const double inv_map_rot = map_conf / map_rot_var;
-    const double inv_f2f_rot = f2f_conf / f2f_rot_var;
-    w_f2f_trans = inv_f2f_trans / std::max(inv_map_trans + inv_f2f_trans, 1e-9);
-    w_f2f_rot = inv_f2f_rot / std::max(inv_map_rot + inv_f2f_rot, 1e-9);
   }
 
   Eigen::Matrix4f final_pose = selected_pose;
@@ -980,7 +1037,8 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
                          << "source=" << pose_source << " f2f_init_used=" << (has_f2f_init ? "true" : "false")
                          << " map_score=" << map_fitness_score << " f2f_init_score=" << f2f_init_score
                          << " map_conf=" << map_conf << " f2f_conf=" << f2f_conf
-                         << " w_f2f_t=" << w_f2f_trans << " w_f2f_r=" << w_f2f_rot);
+                         << " w_f2f_t=" << w_f2f_trans << " w_f2f_r=" << w_f2f_rot
+                         << " w_f2f_ax=" << w_f2f_axial << " w_f2f_nonax=" << w_f2f_nonaxial);
 
   // 构造观测向量 observation（位置+四元数，共7维）,已 修正四元数正负
   Eigen::VectorXf observation(7);
