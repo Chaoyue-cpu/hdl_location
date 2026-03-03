@@ -925,14 +925,42 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
     return aligned;
   }
 
-  // 提取帧到地图位姿（观测值仅使用map配准结果）
+  // 提取帧到地图位姿
   Eigen::Matrix4f map_pose = reg->getFinalTransformation();
   const double map_fitness_score = reg->getFitnessScore();
   const bool map_degenerate = !std::isfinite(map_fitness_score) || map_fitness_score >= ndt_score_bad;
-  Eigen::Matrix4f final_pose = map_pose;
+
+  // 帧间与地图观测融合（按分数与噪声给权重）
+  Eigen::Matrix4f selected_pose = map_pose;
+  std::string pose_source = "map_only";
+  double map_conf = 1.0;
+  double f2f_conf = 0.0;
+  double w_f2f_trans = 0.0;
+  double w_f2f_rot = 0.0;
+  if (has_f2f_init) {
+    selected_pose = fuse_map_and_f2f_pose(map_pose, f2f_init_pose, map_fitness_score, f2f_init_score);
+    pose_source = "fused_map_f2f";
+
+    const double map_trans_var = std::max(map_trans_noise * map_trans_noise, 1e-9);
+    const double f2f_trans_var = std::max(f2f_trans_noise * f2f_trans_noise, 1e-9);
+    const double map_rot_var = std::max(map_rot_noise * map_rot_noise, 1e-9);
+    const double f2f_rot_var = std::max(f2f_rot_noise * f2f_rot_noise, 1e-9);
+
+    map_conf = enable_score_weighted_fusion ? score_to_confidence(map_fitness_score) : 1.0;
+    f2f_conf = enable_score_weighted_fusion ? score_to_confidence(f2f_init_score) * f2f_score_confidence_gain : 1.0;
+
+    const double inv_map_trans = map_conf / map_trans_var;
+    const double inv_f2f_trans = f2f_conf / f2f_trans_var;
+    const double inv_map_rot = map_conf / map_rot_var;
+    const double inv_f2f_rot = f2f_conf / f2f_rot_var;
+    w_f2f_trans = inv_f2f_trans / std::max(inv_map_trans + inv_f2f_trans, 1e-9);
+    w_f2f_rot = inv_f2f_rot / std::max(inv_map_rot + inv_f2f_rot, 1e-9);
+  }
+
+  Eigen::Matrix4f final_pose = selected_pose;
   const bool use_axis_postalign = enable_axis_prior && (!axis_postalign_only_when_degenerate || map_degenerate);
   if (use_axis_postalign) {
-    final_pose = apply_axis_prior(map_pose, map_degenerate ? "postalign_degenerate" : "postalign");
+    final_pose = apply_axis_prior(selected_pose, map_degenerate ? "postalign_degenerate" : "postalign");
   }
   last_map_degenerate = map_degenerate;
   // std::cout << "[TRANSFORM] Current frame pose:" << std::endl;
@@ -947,9 +975,12 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   }
 
   ROS_INFO_STREAM(
-    "[REG] map pose p=[" << p.x() << ", " << p.y() << ", " << p.z() << "] "
+    "[REG] final pose p=[" << p.x() << ", " << p.y() << ", " << p.z() << "] "
                          << "q=[w " << q.w() << ", x " << q.x() << ", y " << q.y() << ", z " << q.z() << "] "
-                         << "f2f_init_used=" << (has_f2f_init ? "true" : "false") << " map_score=" << map_fitness_score << " f2f_init_score=" << f2f_init_score);
+                         << "source=" << pose_source << " f2f_init_used=" << (has_f2f_init ? "true" : "false")
+                         << " map_score=" << map_fitness_score << " f2f_init_score=" << f2f_init_score
+                         << " map_conf=" << map_conf << " f2f_conf=" << f2f_conf
+                         << " w_f2f_t=" << w_f2f_trans << " w_f2f_r=" << w_f2f_rot);
 
   // 构造观测向量 observation（位置+四元数，共7维）,已 修正四元数正负
   Eigen::VectorXf observation(7);
