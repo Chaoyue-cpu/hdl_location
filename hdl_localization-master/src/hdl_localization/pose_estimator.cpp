@@ -538,7 +538,10 @@ Eigen::Matrix4f PoseEstimator::apply_axis_prior(const Eigen::Matrix4f& pose, con
   adjusted.block<3, 1>(0, 3) = p + static_cast<float>(delta_s) * axis_tangent;
   last_axis_s = s_ref + delta_s;
 
-  ROS_INFO_STREAM_THROTTLE(0.5, "[AXIS] " << stage << " s_ref=" << s_ref << " s_best=" << best_s << " raw_delta_s=" << raw_delta_s << " delta_s=" << delta_s << " lateral=" << lateral << " cost=" << best_cost);
+  ROS_INFO_STREAM_THROTTLE(
+    0.5,
+    "[AXIS] " << stage << " s_ref=" << s_ref << " s_best=" << best_s << " raw_delta_s=" << raw_delta_s << " delta_s=" << delta_s << " lateral=" << lateral
+              << " cost=" << best_cost);
   return adjusted;
 }
 
@@ -967,28 +970,13 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   std::cout << " conv=" << map_converged << std::endl;
 
   if (!map_converged) {
-    ROS_WARN_STREAM_THROTTLE(1.0, "[REG] map registration did not converge, keep predicted pose");
-    pcl::transformPointCloud(*cloud, *aligned, map_init_guess);
-    aligned->header = cloud->header;
-
-    last_observation = map_init_guess;
-    wo_pred_error = no_guess.inverse() * map_init_guess;
-    imu_pred_error = imu_guess.inverse() * map_init_guess;
-    if (odom_ukf) {
-      odom_pred_error = odom_guess.inverse() * map_init_guess;
-      imu_odom_pred_error = init_guess.inverse() * map_init_guess;
-    }
-
-    last_map_degenerate = true;
-    prev_cloud = cloud;
-    prev_map_pose = map_init_guess;
-    return aligned;
+    ROS_WARN_STREAM_THROTTLE(1.0, "[REG] map registration did not converge, but still use map observation result");
   }
 
   // 提取帧到地图位姿
   Eigen::Matrix4f map_pose = reg->getFinalTransformation();
   const double map_fitness_score = reg->getFitnessScore();
-  const bool map_degenerate = !std::isfinite(map_fitness_score) || map_fitness_score >= ndt_score_bad;
+  const bool map_degenerate = (!map_converged) || !std::isfinite(map_fitness_score) || map_fitness_score >= ndt_score_bad;
 
   // 帧间与地图观测融合（按分数与噪声给权重）
   Eigen::Matrix4f selected_pose = map_pose;
@@ -1000,17 +988,8 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   double w_f2f_axial = 0.0;
   double w_f2f_nonaxial = 0.0;
   if (has_f2f_init) {
-    selected_pose = fuse_map_and_f2f_pose(
-      map_pose,
-      f2f_init_pose,
-      map_fitness_score,
-      f2f_init_score,
-      &map_conf,
-      &f2f_conf,
-      &w_f2f_trans,
-      &w_f2f_rot,
-      &w_f2f_axial,
-      &w_f2f_nonaxial);
+    selected_pose =
+      fuse_map_and_f2f_pose(map_pose, f2f_init_pose, map_fitness_score, f2f_init_score, &map_conf, &f2f_conf, &w_f2f_trans, &w_f2f_rot, &w_f2f_axial, &w_f2f_nonaxial);
     pose_source = "fused_map_f2f";
   }
 
@@ -1033,12 +1012,10 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
 
   ROS_INFO_STREAM(
     "[REG] final pose p=[" << p.x() << ", " << p.y() << ", " << p.z() << "] "
-                         << "q=[w " << q.w() << ", x " << q.x() << ", y " << q.y() << ", z " << q.z() << "] "
-                         << "source=" << pose_source << " f2f_init_used=" << (has_f2f_init ? "true" : "false")
-                         << " map_score=" << map_fitness_score << " f2f_init_score=" << f2f_init_score
-                         << " map_conf=" << map_conf << " f2f_conf=" << f2f_conf
-                         << " w_f2f_t=" << w_f2f_trans << " w_f2f_r=" << w_f2f_rot
-                         << " w_f2f_ax=" << w_f2f_axial << " w_f2f_nonax=" << w_f2f_nonaxial);
+                           << "q=[w " << q.w() << ", x " << q.x() << ", y " << q.y() << ", z " << q.z() << "] "
+                           << "source=" << pose_source << " f2f_init_used=" << (has_f2f_init ? "true" : "false") << " map_converged=" << (map_converged ? "true" : "false")
+                           << " map_score=" << map_fitness_score << " f2f_init_score=" << f2f_init_score << " map_conf=" << map_conf << " f2f_conf=" << f2f_conf
+                           << " w_f2f_t=" << w_f2f_trans << " w_f2f_r=" << w_f2f_rot << " w_f2f_ax=" << w_f2f_axial << " w_f2f_nonax=" << w_f2f_nonaxial);
 
   // 构造观测向量 observation（位置+四元数，共7维）,已 修正四元数正负
   Eigen::VectorXf observation(7);

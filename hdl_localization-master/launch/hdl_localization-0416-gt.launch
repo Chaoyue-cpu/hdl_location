@@ -15,12 +15,13 @@
   <arg name="invert_imu_gyro" default="false" />
   <arg name="use_global_localization" default="false" />
   <arg name="imu_topic" default="/localization/imu" />
+  <!-- 是否启动帧间位姿融合 -->
   <arg name="enable_frame2frame_ndt" default="false" />
   <!-- NDT_OMP,FAST_GICP -->
-  <arg name="frame2frame_reg_method" default="NDT_OMP" />
+  <arg name="frame2frame_reg_method" default="FAST_GICP" />
   <arg name="enable_score_weighted_fusion" default="true" />
-  <arg name="f2f_score_confidence_gain" default="10.0" />
-  <arg name="enable_axis_anisotropic_fusion" default="true" />
+  <arg name="f2f_score_confidence_gain" default="15.0" />
+  <arg name="enable_axis_anisotropic_fusion" default="false" />
   <arg name="f2f_axial_conf_gain" default="2.0" />
   <arg name="f2f_nonaxial_conf_gain" default="0.5" />
   <arg name="enable_robot_odometry_prediction" value="false" />
@@ -63,9 +64,9 @@
 <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/公司地图/pointcloud_map_metadata.yaml" />
 <param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/公司地图/pointcloud_map.pcd" />    
       <param name="convert_utm_to_local" value="true" />
-      <!-- ndt0.1 -->
-      <!-- <param name="downsample_resolution" value="0.1" /> -->
-            <param name="downsample_resolution" value="0.2" />
+      <!-- ndt0.15 -->
+      <param name="downsample_resolution" value="0.3" />
+            <!-- <param name="downsample_resolution" value="0.2" /> -->
 
     </node>
 
@@ -92,8 +93,8 @@
       <!-- ndt settings -->
       <!-- available reg_methods:FAST_GICP, NDT_OMP, NDT_CUDA_P2D, NDT_CUDA_D2D，FAST_VGICP，GICP，FAST_VGICP,FAST_GICP-->
       <param name="reg_method" value="FAST_GICP" />
-      <!-- if NDT is slow for your PC, try DIRECT1，KDTREE serach method, which is a bit unstable but extremely fast -->
-      <param name="ndt_neighbor_search_method" value="DIRECT7" />
+      <!-- if NDT is slow for your PC, try DIRECT1，DIRECT7，KDTREE serach method, which is a bit unstable but extremely fast -->
+      <param name="ndt_neighbor_search_method" value="KDTREE" />
       <param name="ndt_neighbor_search_radius" value="2.0" />
       <param name="ndt_resolution" value="2.0" />
       <param name="ndt_num_threads" value="6" />
@@ -139,7 +140,7 @@
       <!-- <param name="ndt_neighbor_search_radius" value="1.0" />
       <param name="ndt_resolution" value="0.6" /> -->
       <!-- 初始0.1，会有个别帧索引溢出的问题 -->
-      <param name="downsample_resolution" value="0.15" />
+      <param name="downsample_resolution" value="0.2" />
           <!-- ======== IMU to base 的四元数 ======== -->
     <param name="q_imu_to_base/x" value="1.0" />
     <param name="q_imu_to_base/y" value="0.0" />

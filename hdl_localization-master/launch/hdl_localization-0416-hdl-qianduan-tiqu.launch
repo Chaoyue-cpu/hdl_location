@@ -60,8 +60,8 @@
 <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/DLO_half_keyframe11_0.05resolution.pcd" /> -->
 
 <param name="globalmap_pcd" value="/media/scy/新加卷/数据集/locus多个地下矿井/真值/_ground_truth-20250124T153559Z-001/_ground_truth/D_Tunnel_Husky4_gt/h4_sr2_gt_map.pcd" />
-<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/0805/hdl/pointcloud_map_metadata.yaml" />
-<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/0805/hdl/pointcloud_map.pcd" />    
+<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/0805/hdl-qianduan_tiqu/pointcloud_map_metadata.yaml" />
+<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/0805/hdl-qianduan_tiqu/pointcloud_map.pcd" />    
       <param name="convert_utm_to_local" value="true" />
       <!-- ndt0.1 -->
       <!-- <param name="downsample_resolution" value="0.1" /> -->
