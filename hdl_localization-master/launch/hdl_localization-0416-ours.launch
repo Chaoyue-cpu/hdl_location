@@ -8,6 +8,7 @@
   <!-- <arg name="odom_child_frame_id" default="imu_link" /> -->
     <arg name="odom_child_frame_id" default="base_link" />
 
+    <!-- 车辆大小信息，高度在1.88-1.92之间，x在-0.91到2.12之间，y在-0.72到0.69之间。 -->
 
   <!-- optional arguments，不用imu时除了use_global_localization全false -->
   <arg name="use_imu" default="true" />

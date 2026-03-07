@@ -11,7 +11,7 @@
 
 
   <!-- ndt不用imu，gicp建议用，optional arguments，不用imu时除了use_global_localization全false， -->
-  <arg name="use_imu" default="true" />
+  <arg name="use_imu" default="false" />
   <arg name="invert_imu_acc" default="false" />
   <arg name="invert_imu_gyro" default="false" />
   <arg name="use_global_localization" default="false" />
@@ -21,7 +21,7 @@
   <!-- NDT_OMP,FAST_GICP -->
   <arg name="frame2frame_reg_method" default="FAST_GICP" />
   <arg name="enable_score_weighted_fusion" default="true" />
-  <arg name="f2f_score_confidence_gain" default="10.0" />
+  <arg name="f2f_score_confidence_gain" default="0.0000000000001" />
   <arg name="enable_axis_anisotropic_fusion" default="false" />
   <arg name="f2f_axial_conf_gain" default="2.0" />
   <arg name="f2f_nonaxial_conf_gain" default="0.5" />
@@ -142,7 +142,7 @@
       <param name="axis_prealign_only_when_degenerate" value="false" />
       <param name="axis_postalign_only_when_degenerate" value="true" />
       <!-- map prior voxel layer (core/band/inner/uncertain) -->
-      <param name="enable_map_prior_layer" value="false" />
+      <param name="enable_map_prior_layer" value="true" />
       <param name="map_prior_csv" value="/home/scy/catkin_ws_hdl_location/墙平面0416/prior_layer_map_tuned_clean10/prior_voxel_layer_from_map.csv" />
       <param name="map_prior_voxel_size" value="2.0" />
       <param name="map_prior_sample_step" value="4" />
