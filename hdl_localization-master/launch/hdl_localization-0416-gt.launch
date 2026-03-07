@@ -21,10 +21,12 @@
   <!-- NDT_OMP,FAST_GICP -->
   <arg name="frame2frame_reg_method" default="FAST_GICP" />
   <arg name="enable_score_weighted_fusion" default="true" />
-  <arg name="f2f_score_confidence_gain" default="1000000.0" />
+  <arg name="f2f_score_confidence_gain" default="10.0" />
   <arg name="enable_axis_anisotropic_fusion" default="false" />
   <arg name="f2f_axial_conf_gain" default="2.0" />
   <arg name="f2f_nonaxial_conf_gain" default="0.5" />
+  <arg name="enable_reg_debug_csv" default="true" />
+  <arg name="reg_debug_csv_path" default="/home/scy/catkin_ws_hdl_location/reg_debug_0416_gt.csv" />
   <arg name="enable_robot_odometry_prediction" value="false" />
   <arg name="robot_odom_frame_id" value="odom" />
   <arg name="plot_estimation_errors" value="false" />
@@ -108,8 +110,9 @@
       <param name="frame2frame_reg_method" value="$(arg frame2frame_reg_method)" />
       <param name="enable_score_weighted_fusion" value="$(arg enable_score_weighted_fusion)" />
       <!-- 表示分数控制加权，越小加权越高 -->
-      <param name="ndt_score_good" value="0.30" />
-      <param name="ndt_score_bad" value="0.06" />
+      <param name="ndt_score_good" value="0.06" />
+      <param name="ndt_score_bad" value="0.30" />
+
       <param name="ndt_score_min_confidence" value="0.05" />
       <param name="f2f_score_confidence_gain" value="$(arg f2f_score_confidence_gain)" />
       <param name="enable_axis_anisotropic_fusion" value="$(arg enable_axis_anisotropic_fusion)" />
@@ -139,8 +142,8 @@
       <param name="axis_prealign_only_when_degenerate" value="false" />
       <param name="axis_postalign_only_when_degenerate" value="true" />
       <!-- map prior voxel layer (core/band/inner/uncertain) -->
-      <param name="enable_map_prior_layer" value="true" />
-      <param name="map_prior_csv" value="/home/scy/catkin_ws_hdl_location/prior_layer_map_tuned_clean10_ascii/prior_voxel_layer_from_map.csv" />
+      <param name="enable_map_prior_layer" value="false" />
+      <param name="map_prior_csv" value="/home/scy/catkin_ws_hdl_location/墙平面0416/prior_layer_map_tuned_clean10/prior_voxel_layer_from_map.csv" />
       <param name="map_prior_voxel_size" value="2.0" />
       <param name="map_prior_sample_step" value="4" />
       <param name="map_prior_min_hits" value="120" />
@@ -149,6 +152,8 @@
       <param name="map_prior_inner_gain" value="0.25" />
       <param name="map_prior_uncertain_gain" value="0.15" />
       <param name="map_prior_conf_floor" value="0.2" />
+      <param name="enable_reg_debug_csv" value="$(arg enable_reg_debug_csv)" />
+      <param name="reg_debug_csv_path" value="$(arg reg_debug_csv_path)" />
       <!-- <param name="ndt_neighbor_search_radius" value="1.0" />
       <param name="ndt_resolution" value="0.6" /> -->
       <!-- 初始0.1，会有个别帧索引溢出的问题 -->

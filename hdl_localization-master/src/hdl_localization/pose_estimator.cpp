@@ -8,6 +8,7 @@
 #include <limits>
 #include <sstream>
 #include <unordered_set>
+#include <iomanip>
 
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/common/transforms.h>
@@ -103,7 +104,9 @@ PoseEstimator::PoseEstimator(
   double map_prior_band_gain,
   double map_prior_inner_gain,
   double map_prior_uncertain_gain,
-  double map_prior_conf_floor)
+  double map_prior_conf_floor,
+  bool enable_reg_debug_csv,
+  const std::string& reg_debug_csv_path)
 : registration(registration),
   cool_time_duration(cool_time_duration),
   enable_frame2frame_ndt(enable_frame2frame_ndt),
@@ -147,6 +150,9 @@ PoseEstimator::PoseEstimator(
   map_prior_inner_gain(std::max(0.0, map_prior_inner_gain)),
   map_prior_uncertain_gain(std::max(0.0, map_prior_uncertain_gain)),
   map_prior_conf_floor(std::max(0.0, std::min(1.0, map_prior_conf_floor))),
+  enable_reg_debug_csv(enable_reg_debug_csv),
+  reg_debug_csv_path(reg_debug_csv_path),
+  reg_debug_seq(0),
   last_map_degenerate(false),
   prev_map_pose(Eigen::Matrix4f::Identity()) {
   // 初始化最后一次观测的变换矩阵（4x4单位矩阵）
@@ -272,9 +278,36 @@ PoseEstimator::PoseEstimator(
       ROS_INFO_STREAM("map prior layer loaded: cells=" << map_prior_cells.size() << " voxel_size=" << map_prior_voxel_size);
     }
   }
+
+  if (this->enable_reg_debug_csv) {
+    if (this->reg_debug_csv_path.empty()) {
+      ROS_WARN_STREAM("reg debug csv disabled: empty path");
+      this->enable_reg_debug_csv = false;
+    } else {
+      reg_debug_csv_stream.open(this->reg_debug_csv_path, std::ios::out | std::ios::trunc);
+      if (!reg_debug_csv_stream.is_open()) {
+        ROS_WARN_STREAM("reg debug csv disabled: failed to open path: " << this->reg_debug_csv_path);
+        this->enable_reg_debug_csv = false;
+      } else {
+        reg_debug_csv_stream
+          << "seq,stamp,pose_source,f2f_init_used,map_converged,map_degenerate,"
+          << "map_score,f2f_init_score,map_conf,f2f_conf,"
+          << "w_f2f_t,w_f2f_r,w_f2f_ax,w_f2f_nonax,"
+          << "prior_mult,prior_hit_ratio,prior_avg_conf,"
+          << "px,py,pz,qw,qx,qy,qz\n";
+        reg_debug_csv_stream.flush();
+        ROS_INFO_STREAM("reg debug csv enabled: " << this->reg_debug_csv_path);
+      }
+    }
+  }
 }
 
-PoseEstimator::~PoseEstimator() {}
+PoseEstimator::~PoseEstimator() {
+  if (reg_debug_csv_stream.is_open()) {
+    reg_debug_csv_stream.flush();
+    reg_debug_csv_stream.close();
+  }
+}
 
 void PoseEstimator::set_registration(const pcl::Registration<PointT, PointT>::Ptr& reg) {
   std::lock_guard<std::mutex> lk(reg_mtx_);
@@ -830,6 +863,57 @@ double PoseEstimator::compute_map_prior_conf_multiplier(
   return std::max(map_prior_conf_floor, std::min(1.5, avg));
 }
 
+void PoseEstimator::write_reg_debug_row(
+  const ros::Time& stamp,
+  const std::string& pose_source,
+  bool has_f2f_init,
+  bool map_converged,
+  bool map_degenerate,
+  double map_fitness_score,
+  double f2f_fitness_score,
+  double map_conf,
+  double f2f_conf,
+  double w_f2f_trans,
+  double w_f2f_rot,
+  double w_f2f_axial,
+  double w_f2f_nonaxial,
+  double map_prior_mult,
+  double map_prior_hit_ratio,
+  double map_prior_avg_conf,
+  const Eigen::Vector3f& p,
+  const Eigen::Quaternionf& q) {
+  if (!enable_reg_debug_csv || !reg_debug_csv_stream.is_open()) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(reg_debug_csv_mutex);
+  reg_debug_csv_stream << reg_debug_seq++ << ","
+                       << std::fixed << std::setprecision(9) << stamp.toSec() << ","
+                       << pose_source << ","
+                       << (has_f2f_init ? 1 : 0) << ","
+                       << (map_converged ? 1 : 0) << ","
+                       << (map_degenerate ? 1 : 0) << ","
+                       << map_fitness_score << ","
+                       << f2f_fitness_score << ","
+                       << map_conf << ","
+                       << f2f_conf << ","
+                       << w_f2f_trans << ","
+                       << w_f2f_rot << ","
+                       << w_f2f_axial << ","
+                       << w_f2f_nonaxial << ","
+                       << map_prior_mult << ","
+                       << map_prior_hit_ratio << ","
+                       << map_prior_avg_conf << ","
+                       << p.x() << ","
+                       << p.y() << ","
+                       << p.z() << ","
+                       << q.w() << ","
+                       << q.x() << ","
+                       << q.y() << ","
+                       << q.z() << "\n";
+  reg_debug_csv_stream.flush();
+}
+
 double PoseEstimator::score_to_confidence(double score) const {
   const double min_conf = std::min(std::max(ndt_score_min_confidence, 0.0), 1.0);
   if (!std::isfinite(score)) {
@@ -1213,6 +1297,25 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
                            << " map_score=" << map_fitness_score << " f2f_init_score=" << f2f_init_score << " map_conf=" << map_conf << " f2f_conf=" << f2f_conf
                            << " w_f2f_t=" << w_f2f_trans << " w_f2f_r=" << w_f2f_rot << " w_f2f_ax=" << w_f2f_axial << " w_f2f_nonax=" << w_f2f_nonaxial
                            << " prior_mult=" << map_prior_mult << " prior_hit_ratio=" << map_prior_hit_ratio << " prior_avg_conf=" << map_prior_avg_conf);
+  write_reg_debug_row(
+    stamp,
+    pose_source,
+    has_f2f_init,
+    map_converged,
+    map_degenerate,
+    map_fitness_score,
+    f2f_init_score,
+    map_conf,
+    f2f_conf,
+    w_f2f_trans,
+    w_f2f_rot,
+    w_f2f_axial,
+    w_f2f_nonaxial,
+    map_prior_mult,
+    map_prior_hit_ratio,
+    map_prior_avg_conf,
+    p,
+    q);
 
   // 构造观测向量 observation（位置+四元数，共7维）,已 修正四元数正负
   Eigen::VectorXf observation(7);

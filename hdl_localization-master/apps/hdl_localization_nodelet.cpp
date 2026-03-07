@@ -445,7 +445,9 @@ private:
         private_nh.param<double>("map_prior_band_gain", 0.7),
         private_nh.param<double>("map_prior_inner_gain", 0.25),
         private_nh.param<double>("map_prior_uncertain_gain", 0.15),
-        private_nh.param<double>("map_prior_conf_floor", 0.2)));
+        private_nh.param<double>("map_prior_conf_floor", 0.2),
+        private_nh.param<bool>("enable_reg_debug_csv", false),
+        private_nh.param<std::string>("reg_debug_csv_path", std::string(""))));
     }
   }
 
@@ -892,7 +894,9 @@ private:
       private_nh.param<double>("map_prior_band_gain", 0.7),
       private_nh.param<double>("map_prior_inner_gain", 0.25),
       private_nh.param<double>("map_prior_uncertain_gain", 0.15),
-      private_nh.param<double>("map_prior_conf_floor", 0.2)));
+      private_nh.param<double>("map_prior_conf_floor", 0.2),
+      private_nh.param<bool>("enable_reg_debug_csv", false),
+      private_nh.param<std::string>("reg_debug_csv_path", std::string(""))));
 
     relocalizing = false;
 
@@ -955,7 +959,9 @@ private:
       private_nh.param<double>("map_prior_band_gain", 0.7),
       private_nh.param<double>("map_prior_inner_gain", 0.25),
       private_nh.param<double>("map_prior_uncertain_gain", 0.15),
-      private_nh.param<double>("map_prior_conf_floor", 0.2)));
+      private_nh.param<double>("map_prior_conf_floor", 0.2),
+      private_nh.param<bool>("enable_reg_debug_csv", false),
+      private_nh.param<std::string>("reg_debug_csv_path", std::string(""))));
   }
 
   /**

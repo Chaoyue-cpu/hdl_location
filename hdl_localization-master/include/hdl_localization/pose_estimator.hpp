@@ -6,6 +6,7 @@
 #include <vector>
 #include <unordered_map>
 #include <cstdint>
+#include <fstream>
 #include <boost/optional.hpp>
 #include <mutex>
 
@@ -89,7 +90,9 @@ public:
     double map_prior_band_gain = 0.7,
     double map_prior_inner_gain = 0.25,
     double map_prior_uncertain_gain = 0.15,
-    double map_prior_conf_floor = 0.2);
+    double map_prior_conf_floor = 0.2,
+    bool enable_reg_debug_csv = false,
+    const std::string& reg_debug_csv_path = "");
   ~PoseEstimator();
 
   /**
@@ -168,6 +171,25 @@ private:
     const Eigen::Matrix4f& map_pose,
     double* out_hit_ratio = nullptr,
     double* out_avg_prior_conf = nullptr) const;
+  void write_reg_debug_row(
+    const ros::Time& stamp,
+    const std::string& pose_source,
+    bool has_f2f_init,
+    bool map_converged,
+    bool map_degenerate,
+    double map_fitness_score,
+    double f2f_fitness_score,
+    double map_conf,
+    double f2f_conf,
+    double w_f2f_trans,
+    double w_f2f_rot,
+    double w_f2f_axial,
+    double w_f2f_nonaxial,
+    double map_prior_mult,
+    double map_prior_hit_ratio,
+    double map_prior_avg_conf,
+    const Eigen::Vector3f& p,
+    const Eigen::Quaternionf& q);
 
   ros::Time init_stamp;  // when the estimator was initialized
   ros::Time prev_stamp;  // when the estimator was updated last time
@@ -267,6 +289,11 @@ private:
   double map_prior_uncertain_gain;
   double map_prior_conf_floor;
   std::unordered_map<PriorKey, PriorVoxelCell, PriorKeyHash> map_prior_cells;
+  bool enable_reg_debug_csv;
+  std::string reg_debug_csv_path;
+  std::ofstream reg_debug_csv_stream;
+  std::uint64_t reg_debug_seq;
+  mutable std::mutex reg_debug_csv_mutex;
 
   pcl::Registration<PointT, PointT>::Ptr registration;
   mutable std::mutex reg_mtx_;
