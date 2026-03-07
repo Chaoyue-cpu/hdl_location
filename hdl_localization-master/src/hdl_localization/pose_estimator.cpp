@@ -74,6 +74,8 @@ PoseEstimator::PoseEstimator(
   bool enable_axis_anisotropic_fusion,
   double f2f_axial_conf_gain,
   double f2f_nonaxial_conf_gain,
+  double map_axial_conf_gain,
+  double map_nonaxial_conf_gain,
   bool enable_f2f_confidence_filter,
   bool enable_f2f_dynamic_filter,
   double f2f_wall_y_threshold,
@@ -122,6 +124,8 @@ PoseEstimator::PoseEstimator(
   enable_axis_anisotropic_fusion(enable_axis_anisotropic_fusion),
   f2f_axial_conf_gain(std::max(0.0, f2f_axial_conf_gain)),
   f2f_nonaxial_conf_gain(std::max(0.0, f2f_nonaxial_conf_gain)),
+  map_axial_conf_gain(std::max(0.0, map_axial_conf_gain)),
+  map_nonaxial_conf_gain(std::max(0.0, map_nonaxial_conf_gain)),
   enable_f2f_confidence_filter(enable_f2f_confidence_filter),
   enable_f2f_dynamic_filter(enable_f2f_dynamic_filter),
   f2f_wall_y_threshold(std::max(0.0, f2f_wall_y_threshold)),
@@ -249,23 +253,39 @@ PoseEstimator::PoseEstimator(
     ROS_INFO_STREAM("frame-to-frame registration: NDT_OMP");
   }
 
-  if (enable_axis_prior) {
+  const bool need_axis_centerline = enable_axis_prior || enable_axis_anisotropic_fusion;
+  if (need_axis_centerline) {
     const bool ok_centerline = load_axis_centerline_csv(axis_centerline_csv);
-    const bool ok_profile = load_axis_profile_csv(axis_profile_csv);
     if (!ok_centerline) {
-      ROS_WARN_STREAM("axis prior disabled: failed to load centerline csv: " << axis_centerline_csv);
-      this->enable_axis_prior = false;
-    } else if (!ok_profile) {
-      ROS_WARN_STREAM("axis profile csv missing or invalid, axis prior will use XY only: " << axis_profile_csv);
+      if (enable_axis_prior) {
+        ROS_WARN_STREAM("axis prior disabled: failed to load centerline csv: " << axis_centerline_csv);
+        this->enable_axis_prior = false;
+      }
+      if (enable_axis_anisotropic_fusion) {
+        ROS_WARN_STREAM("axis anisotropic fusion disabled: failed to load centerline csv: " << axis_centerline_csv);
+        this->enable_axis_anisotropic_fusion = false;
+      }
     } else {
-      ROS_INFO_STREAM("axis prior loaded: centerline_samples=" << axis_centerline.size() << " profile_samples=" << axis_profile.size());
+      ROS_INFO_STREAM("axis centerline loaded: samples=" << axis_centerline.size());
+      if (enable_axis_prior) {
+        const bool ok_profile = load_axis_profile_csv(axis_profile_csv);
+        if (!ok_profile) {
+          ROS_WARN_STREAM("axis profile csv missing or invalid, axis prior will use XY only: " << axis_profile_csv);
+        } else {
+          ROS_INFO_STREAM("axis prior profile loaded: profile_samples=" << axis_profile.size());
+        }
+      }
       double init_s = 0.0;
       double init_lateral = 0.0;
       if (project_to_axis(pos, &init_s, &init_lateral)) {
         last_axis_s = init_s;
-        ROS_INFO_STREAM("axis prior init from pose: s=" << init_s << " lateral=" << init_lateral);
+        if (enable_axis_prior) {
+          ROS_INFO_STREAM("axis prior init from pose: s=" << init_s << " lateral=" << init_lateral);
+        } else if (enable_axis_anisotropic_fusion) {
+          ROS_INFO_STREAM("axis anisotropic fusion init from pose: s=" << init_s << " lateral=" << init_lateral);
+        }
       } else {
-        ROS_WARN_STREAM("axis prior init failed to project initial pose to centerline");
+        ROS_WARN_STREAM("failed to project initial pose to centerline");
       }
     }
   }
@@ -966,7 +986,7 @@ Eigen::Matrix4f PoseEstimator::fuse_map_and_f2f_pose(
   double w_f2f_nonaxial = w_f2f_trans;
   Eigen::Vector3f p_fused = (1.0 - w_f2f_trans) * p_map + w_f2f_trans * p_f2f;
 
-  if (enable_axis_anisotropic_fusion && enable_axis_prior && axis_centerline.size() >= 2) {
+  if (enable_axis_anisotropic_fusion && axis_centerline.size() >= 2) {
     double s_ref = 0.0;
     double lateral = 0.0;
     if (project_to_axis(p_map, &s_ref, &lateral)) {
@@ -978,10 +998,12 @@ Eigen::Matrix4f PoseEstimator::fuse_map_and_f2f_pose(
         const Eigen::Vector3f delta_axial = delta.dot(axis_tangent) * axis_tangent;
         const Eigen::Vector3f delta_nonaxial = delta - delta_axial;
 
+        const double inv_map_axial = (map_conf * map_axial_conf_gain) / map_trans_var;
+        const double inv_map_nonaxial = (map_conf * map_nonaxial_conf_gain) / map_trans_var;
         const double inv_f2f_axial = (f2f_conf * f2f_axial_conf_gain) / f2f_trans_var;
         const double inv_f2f_nonaxial = (f2f_conf * f2f_nonaxial_conf_gain) / f2f_trans_var;
-        w_f2f_axial = inv_f2f_axial / std::max(inv_map_trans + inv_f2f_axial, 1e-9);
-        w_f2f_nonaxial = inv_f2f_nonaxial / std::max(inv_map_trans + inv_f2f_nonaxial, 1e-9);
+        w_f2f_axial = inv_f2f_axial / std::max(inv_map_axial + inv_f2f_axial, 1e-9);
+        w_f2f_nonaxial = inv_f2f_nonaxial / std::max(inv_map_nonaxial + inv_f2f_nonaxial, 1e-9);
 
         p_fused = p_map + static_cast<float>(w_f2f_axial) * delta_axial + static_cast<float>(w_f2f_nonaxial) * delta_nonaxial;
       }

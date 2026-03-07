@@ -60,6 +60,8 @@ public:
     bool enable_axis_anisotropic_fusion = false,
     double f2f_axial_conf_gain = 2.0,
     double f2f_nonaxial_conf_gain = 0.5,
+    double map_axial_conf_gain = 0.3,
+    double map_nonaxial_conf_gain = 1.0,
     bool enable_f2f_confidence_filter = false,
     bool enable_f2f_dynamic_filter = false,
     double f2f_wall_y_threshold = 3.0,
@@ -222,6 +224,8 @@ private:
   bool enable_axis_anisotropic_fusion;
   double f2f_axial_conf_gain;
   double f2f_nonaxial_conf_gain;
+  double map_axial_conf_gain;
+  double map_nonaxial_conf_gain;
   bool enable_f2f_confidence_filter;
   bool enable_f2f_dynamic_filter;
   double f2f_wall_y_threshold;

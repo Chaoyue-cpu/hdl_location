@@ -21,10 +21,12 @@
   <!-- NDT_OMP,FAST_GICP -->
   <arg name="frame2frame_reg_method" default="FAST_GICP" />
   <arg name="enable_score_weighted_fusion" default="true" />
-  <arg name="f2f_score_confidence_gain" default="0.0000000000001" />
-  <arg name="enable_axis_anisotropic_fusion" default="false" />
-  <arg name="f2f_axial_conf_gain" default="2.0" />
-  <arg name="f2f_nonaxial_conf_gain" default="0.5" />
+  <arg name="f2f_score_confidence_gain" default="1.0" />
+  <arg name="enable_axis_anisotropic_fusion" default="true" />
+  <arg name="f2f_axial_conf_gain" default="1.0" />
+  <arg name="f2f_nonaxial_conf_gain" default="0.25" />
+  <arg name="map_axial_conf_gain" default="0.3" />
+  <arg name="map_nonaxial_conf_gain" default="1.0" />
   <arg name="enable_reg_debug_csv" default="true" />
   <arg name="reg_debug_csv_path" default="/home/scy/catkin_ws_hdl_location/reg_debug_0416_gt.csv" />
   <arg name="enable_robot_odometry_prediction" value="false" />
@@ -118,6 +120,8 @@
       <param name="enable_axis_anisotropic_fusion" value="$(arg enable_axis_anisotropic_fusion)" />
       <param name="f2f_axial_conf_gain" value="$(arg f2f_axial_conf_gain)" />
       <param name="f2f_nonaxial_conf_gain" value="$(arg f2f_nonaxial_conf_gain)" />
+      <param name="map_axial_conf_gain" value="$(arg map_axial_conf_gain)" />
+      <param name="map_nonaxial_conf_gain" value="$(arg map_nonaxial_conf_gain)" />
       <!-- lightweight f2f confidence filtering (default off) -->
       <param name="enable_f2f_confidence_filter" value="true" />
       <param name="enable_f2f_dynamic_filter" value="true" />
