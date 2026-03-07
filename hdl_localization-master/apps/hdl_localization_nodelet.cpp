@@ -435,7 +435,17 @@ private:
         private_nh.param<double>("axis_max_lateral", 20.0),
         private_nh.param<double>("axis_max_delta_s", 0.15),
         private_nh.param<bool>("axis_prealign_only_when_degenerate", true),
-        private_nh.param<bool>("axis_postalign_only_when_degenerate", true)));
+        private_nh.param<bool>("axis_postalign_only_when_degenerate", true),
+        private_nh.param<bool>("enable_map_prior_layer", false),
+        private_nh.param<std::string>("map_prior_csv", std::string("")),
+        private_nh.param<double>("map_prior_voxel_size", 2.0),
+        private_nh.param<int>("map_prior_sample_step", 4),
+        private_nh.param<int>("map_prior_min_hits", 120),
+        private_nh.param<double>("map_prior_core_gain", 1.0),
+        private_nh.param<double>("map_prior_band_gain", 0.7),
+        private_nh.param<double>("map_prior_inner_gain", 0.25),
+        private_nh.param<double>("map_prior_uncertain_gain", 0.15),
+        private_nh.param<double>("map_prior_conf_floor", 0.2)));
     }
   }
 
@@ -872,7 +882,17 @@ private:
       private_nh.param<double>("axis_max_lateral", 20.0),
       private_nh.param<double>("axis_max_delta_s", 0.15),
       private_nh.param<bool>("axis_prealign_only_when_degenerate", true),
-      private_nh.param<bool>("axis_postalign_only_when_degenerate", true)));
+      private_nh.param<bool>("axis_postalign_only_when_degenerate", true),
+      private_nh.param<bool>("enable_map_prior_layer", false),
+      private_nh.param<std::string>("map_prior_csv", std::string("")),
+      private_nh.param<double>("map_prior_voxel_size", 2.0),
+      private_nh.param<int>("map_prior_sample_step", 4),
+      private_nh.param<int>("map_prior_min_hits", 120),
+      private_nh.param<double>("map_prior_core_gain", 1.0),
+      private_nh.param<double>("map_prior_band_gain", 0.7),
+      private_nh.param<double>("map_prior_inner_gain", 0.25),
+      private_nh.param<double>("map_prior_uncertain_gain", 0.15),
+      private_nh.param<double>("map_prior_conf_floor", 0.2)));
 
     relocalizing = false;
 
@@ -925,7 +945,17 @@ private:
       private_nh.param<double>("axis_max_lateral", 20.0),
       private_nh.param<double>("axis_max_delta_s", 0.15),
       private_nh.param<bool>("axis_prealign_only_when_degenerate", true),
-      private_nh.param<bool>("axis_postalign_only_when_degenerate", true)));
+      private_nh.param<bool>("axis_postalign_only_when_degenerate", true),
+      private_nh.param<bool>("enable_map_prior_layer", false),
+      private_nh.param<std::string>("map_prior_csv", std::string("")),
+      private_nh.param<double>("map_prior_voxel_size", 2.0),
+      private_nh.param<int>("map_prior_sample_step", 4),
+      private_nh.param<int>("map_prior_min_hits", 120),
+      private_nh.param<double>("map_prior_core_gain", 1.0),
+      private_nh.param<double>("map_prior_band_gain", 0.7),
+      private_nh.param<double>("map_prior_inner_gain", 0.25),
+      private_nh.param<double>("map_prior_uncertain_gain", 0.15),
+      private_nh.param<double>("map_prior_conf_floor", 0.2)));
   }
 
   /**

@@ -4,6 +4,8 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <unordered_map>
+#include <cstdint>
 #include <boost/optional.hpp>
 #include <mutex>
 
@@ -77,7 +79,17 @@ public:
     double axis_max_lateral = 20.0,
     double axis_max_delta_s = 0.15,
     bool axis_prealign_only_when_degenerate = true,
-    bool axis_postalign_only_when_degenerate = true);
+    bool axis_postalign_only_when_degenerate = true,
+    bool enable_map_prior_layer = false,
+    const std::string& map_prior_csv = "",
+    double map_prior_voxel_size = 2.0,
+    int map_prior_sample_step = 4,
+    int map_prior_min_hits = 120,
+    double map_prior_core_gain = 1.0,
+    double map_prior_band_gain = 0.7,
+    double map_prior_inner_gain = 0.25,
+    double map_prior_uncertain_gain = 0.15,
+    double map_prior_conf_floor = 0.2);
   ~PoseEstimator();
 
   /**
@@ -136,6 +148,7 @@ private:
     const Eigen::Matrix4f& f2f_pose,
     double map_fitness_score,
     double f2f_fitness_score,
+    double map_conf_multiplier = 1.0,
     double* out_map_conf = nullptr,
     double* out_f2f_conf = nullptr,
     double* out_w_f2f_trans = nullptr,
@@ -149,6 +162,12 @@ private:
   bool interpolate_axis_z(double s, double* z) const;
   bool project_to_axis(const Eigen::Vector3f& p, double* s, double* lateral_distance) const;
   Eigen::Matrix4f apply_axis_prior(const Eigen::Matrix4f& pose, const char* stage);
+  bool load_map_prior_csv(const std::string& path);
+  double compute_map_prior_conf_multiplier(
+    const pcl::PointCloud<PointT>::ConstPtr& cloud,
+    const Eigen::Matrix4f& map_pose,
+    double* out_hit_ratio = nullptr,
+    double* out_avg_prior_conf = nullptr) const;
 
   ros::Time init_stamp;  // when the estimator was initialized
   ros::Time prev_stamp;  // when the estimator was updated last time
@@ -219,6 +238,35 @@ private:
   pcl::Registration<PointT, PointT>::Ptr frame2frame_registration;
   pcl::PointCloud<PointT>::ConstPtr prev_cloud;
   Eigen::Matrix4f prev_map_pose;
+
+  struct PriorVoxelCell {
+    uint8_t class_id = 0;     // 0 uncertain, 1 inner, 2 band, 3 core
+    float conf_prior = 0.0f;  // [0,1]
+  };
+  struct PriorKey {
+    int x;
+    int y;
+    int z;
+    bool operator==(const PriorKey& other) const { return x == other.x && y == other.y && z == other.z; }
+  };
+  struct PriorKeyHash {
+    std::size_t operator()(const PriorKey& key) const {
+      std::size_t hx = static_cast<std::size_t>(std::hash<int>{}(key.x));
+      std::size_t hy = static_cast<std::size_t>(std::hash<int>{}(key.y));
+      std::size_t hz = static_cast<std::size_t>(std::hash<int>{}(key.z));
+      return hx ^ (hy << 1) ^ (hz << 2);
+    }
+  };
+  bool enable_map_prior_layer;
+  double map_prior_voxel_size;
+  int map_prior_sample_step;
+  int map_prior_min_hits;
+  double map_prior_core_gain;
+  double map_prior_band_gain;
+  double map_prior_inner_gain;
+  double map_prior_uncertain_gain;
+  double map_prior_conf_floor;
+  std::unordered_map<PriorKey, PriorVoxelCell, PriorKeyHash> map_prior_cells;
 
   pcl::Registration<PointT, PointT>::Ptr registration;
   mutable std::mutex reg_mtx_;

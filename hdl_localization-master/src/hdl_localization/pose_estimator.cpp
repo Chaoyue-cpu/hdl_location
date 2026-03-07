@@ -93,7 +93,17 @@ PoseEstimator::PoseEstimator(
   double axis_max_lateral,
   double axis_max_delta_s,
   bool axis_prealign_only_when_degenerate,
-  bool axis_postalign_only_when_degenerate)
+  bool axis_postalign_only_when_degenerate,
+  bool enable_map_prior_layer,
+  const std::string& map_prior_csv,
+  double map_prior_voxel_size,
+  int map_prior_sample_step,
+  int map_prior_min_hits,
+  double map_prior_core_gain,
+  double map_prior_band_gain,
+  double map_prior_inner_gain,
+  double map_prior_uncertain_gain,
+  double map_prior_conf_floor)
 : registration(registration),
   cool_time_duration(cool_time_duration),
   enable_frame2frame_ndt(enable_frame2frame_ndt),
@@ -128,6 +138,15 @@ PoseEstimator::PoseEstimator(
   axis_max_delta_s(std::max(0.01, axis_max_delta_s)),
   axis_prealign_only_when_degenerate(axis_prealign_only_when_degenerate),
   axis_postalign_only_when_degenerate(axis_postalign_only_when_degenerate),
+  enable_map_prior_layer(enable_map_prior_layer),
+  map_prior_voxel_size(std::max(0.1, map_prior_voxel_size)),
+  map_prior_sample_step(std::max(1, map_prior_sample_step)),
+  map_prior_min_hits(std::max(10, map_prior_min_hits)),
+  map_prior_core_gain(std::max(0.0, map_prior_core_gain)),
+  map_prior_band_gain(std::max(0.0, map_prior_band_gain)),
+  map_prior_inner_gain(std::max(0.0, map_prior_inner_gain)),
+  map_prior_uncertain_gain(std::max(0.0, map_prior_uncertain_gain)),
+  map_prior_conf_floor(std::max(0.0, std::min(1.0, map_prior_conf_floor))),
   last_map_degenerate(false),
   prev_map_pose(Eigen::Matrix4f::Identity()) {
   // 初始化最后一次观测的变换矩阵（4x4单位矩阵）
@@ -242,6 +261,15 @@ PoseEstimator::PoseEstimator(
       } else {
         ROS_WARN_STREAM("axis prior init failed to project initial pose to centerline");
       }
+    }
+  }
+
+  if (this->enable_map_prior_layer) {
+    if (!load_map_prior_csv(map_prior_csv)) {
+      ROS_WARN_STREAM("map prior layer disabled: failed to load csv: " << map_prior_csv);
+      this->enable_map_prior_layer = false;
+    } else {
+      ROS_INFO_STREAM("map prior layer loaded: cells=" << map_prior_cells.size() << " voxel_size=" << map_prior_voxel_size);
     }
   }
 }
@@ -644,6 +672,164 @@ bool PoseEstimator::compute_f2f_absolute_pose(
   return true;
 }
 
+bool PoseEstimator::load_map_prior_csv(const std::string& path) {
+  map_prior_cells.clear();
+  if (path.empty()) {
+    return false;
+  }
+
+  std::ifstream ifs(path);
+  if (!ifs.good()) {
+    return false;
+  }
+
+  std::string line;
+  if (!std::getline(ifs, line)) {
+    return false;
+  }
+
+  auto trim_cell = [](std::string cell) {
+    // Handle UTF-8 BOM, Windows CRLF, and incidental surrounding spaces.
+    if (cell.size() >= 3 &&
+        static_cast<unsigned char>(cell[0]) == 0xEF &&
+        static_cast<unsigned char>(cell[1]) == 0xBB &&
+        static_cast<unsigned char>(cell[2]) == 0xBF) {
+      cell.erase(0, 3);
+    }
+    while (!cell.empty() && (cell.back() == '\r' || cell.back() == '\n' || std::isspace(static_cast<unsigned char>(cell.back())))) {
+      cell.pop_back();
+    }
+    std::size_t begin = 0;
+    while (begin < cell.size() && std::isspace(static_cast<unsigned char>(cell[begin]))) {
+      ++begin;
+    }
+    if (begin > 0) {
+      cell.erase(0, begin);
+    }
+    return cell;
+  };
+
+  auto split_csv = [&trim_cell](const std::string& s) {
+    std::vector<std::string> cols;
+    std::stringstream ss(s);
+    std::string cell;
+    while (std::getline(ss, cell, ',')) {
+      cols.emplace_back(trim_cell(cell));
+    }
+    return cols;
+  };
+
+  const auto header = split_csv(line);
+  int idx_ix = -1;
+  int idx_iy = -1;
+  int idx_iz = -1;
+  int idx_class_id = -1;
+  int idx_conf = -1;
+  for (std::size_t i = 0; i < header.size(); ++i) {
+    if (header[i] == "ix") idx_ix = static_cast<int>(i);
+    else if (header[i] == "iy") idx_iy = static_cast<int>(i);
+    else if (header[i] == "iz") idx_iz = static_cast<int>(i);
+    else if (header[i] == "class_id") idx_class_id = static_cast<int>(i);
+    else if (header[i] == "conf_prior") idx_conf = static_cast<int>(i);
+  }
+  if (idx_ix < 0 || idx_iy < 0 || idx_iz < 0 || idx_class_id < 0 || idx_conf < 0) {
+    ROS_WARN_STREAM("map prior csv missing required columns");
+    return false;
+  }
+
+  std::size_t loaded = 0;
+  while (std::getline(ifs, line)) {
+    if (line.empty()) {
+      continue;
+    }
+    const auto cols = split_csv(line);
+    const int required = std::max({idx_ix, idx_iy, idx_iz, idx_class_id, idx_conf});
+    if (static_cast<int>(cols.size()) <= required) {
+      continue;
+    }
+
+    try {
+      PriorKey key;
+      key.x = std::stoi(cols[idx_ix]);
+      key.y = std::stoi(cols[idx_iy]);
+      key.z = std::stoi(cols[idx_iz]);
+
+      PriorVoxelCell cell;
+      cell.class_id = static_cast<uint8_t>(std::max(0, std::min(3, std::stoi(cols[idx_class_id]))));
+      const double conf = std::stod(cols[idx_conf]);
+      cell.conf_prior = static_cast<float>(std::max(0.0, std::min(1.0, conf)));
+
+      map_prior_cells[key] = cell;
+      ++loaded;
+    } catch (...) {
+      continue;
+    }
+  }
+
+  ROS_INFO_STREAM("map prior csv loaded cells=" << loaded);
+  return loaded > 0;
+}
+
+double PoseEstimator::compute_map_prior_conf_multiplier(
+  const pcl::PointCloud<PointT>::ConstPtr& cloud,
+  const Eigen::Matrix4f& map_pose,
+  double* out_hit_ratio,
+  double* out_avg_prior_conf) const {
+  if (!enable_map_prior_layer || map_prior_cells.empty() || !cloud || cloud->empty()) {
+    if (out_hit_ratio) *out_hit_ratio = 0.0;
+    if (out_avg_prior_conf) *out_avg_prior_conf = 0.0;
+    return 1.0;
+  }
+
+  const float inv = 1.0f / static_cast<float>(map_prior_voxel_size);
+  double sum = 0.0;
+  double sum_conf = 0.0;
+  int hits = 0;
+  int tested = 0;
+
+  for (std::size_t i = 0; i < cloud->size(); i += static_cast<std::size_t>(map_prior_sample_step)) {
+    const auto& pt = cloud->points[i];
+    if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) {
+      continue;
+    }
+    ++tested;
+    const Eigen::Vector4f p_local(pt.x, pt.y, pt.z, 1.0f);
+    const Eigen::Vector4f p_map = map_pose * p_local;
+    PriorKey key;
+    key.x = static_cast<int>(std::floor(p_map.x() * inv));
+    key.y = static_cast<int>(std::floor(p_map.y() * inv));
+    key.z = static_cast<int>(std::floor(p_map.z() * inv));
+
+    auto it = map_prior_cells.find(key);
+    if (it == map_prior_cells.end()) {
+      continue;
+    }
+
+    double cls_gain = map_prior_uncertain_gain;
+    if (it->second.class_id == 3) cls_gain = map_prior_core_gain;
+    else if (it->second.class_id == 2) cls_gain = map_prior_band_gain;
+    else if (it->second.class_id == 1) cls_gain = map_prior_inner_gain;
+
+    const double conf = static_cast<double>(it->second.conf_prior);
+    sum += conf * cls_gain;
+    sum_conf += conf;
+    ++hits;
+  }
+
+  const double hit_ratio = tested > 0 ? static_cast<double>(hits) / static_cast<double>(tested) : 0.0;
+  const double avg_conf = hits > 0 ? sum_conf / static_cast<double>(hits) : 0.0;
+  if (out_hit_ratio) *out_hit_ratio = hit_ratio;
+  if (out_avg_prior_conf) *out_avg_prior_conf = avg_conf;
+
+  if (hits < map_prior_min_hits) {
+    return 1.0;
+  }
+
+  const double avg = sum / static_cast<double>(hits);
+  // Map confidence multiplier; clamp to avoid overly aggressive reweighting.
+  return std::max(map_prior_conf_floor, std::min(1.5, avg));
+}
+
 double PoseEstimator::score_to_confidence(double score) const {
   const double min_conf = std::min(std::max(ndt_score_min_confidence, 0.0), 1.0);
   if (!std::isfinite(score)) {
@@ -662,6 +848,7 @@ Eigen::Matrix4f PoseEstimator::fuse_map_and_f2f_pose(
   const Eigen::Matrix4f& f2f_pose,
   double map_fitness_score,
   double f2f_fitness_score,
+  double map_conf_multiplier,
   double* out_map_conf,
   double* out_f2f_conf,
   double* out_w_f2f_trans,
@@ -679,6 +866,7 @@ Eigen::Matrix4f PoseEstimator::fuse_map_and_f2f_pose(
     map_conf = score_to_confidence(map_fitness_score);
     f2f_conf = score_to_confidence(f2f_fitness_score) * f2f_score_confidence_gain;
   }
+  map_conf *= std::max(map_prior_conf_floor, map_conf_multiplier);
 
   const double inv_map_trans = map_conf / map_trans_var;
   const double inv_f2f_trans = f2f_conf / f2f_trans_var;
@@ -983,14 +1171,22 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   std::string pose_source = "map_only";
   double map_conf = 1.0;
   double f2f_conf = 0.0;
+  double map_prior_mult = 1.0;
+  double map_prior_hit_ratio = 0.0;
+  double map_prior_avg_conf = 0.0;
+  if (enable_map_prior_layer) {
+    map_prior_mult = compute_map_prior_conf_multiplier(cloud, map_pose, &map_prior_hit_ratio, &map_prior_avg_conf);
+  }
   double w_f2f_trans = 0.0;
   double w_f2f_rot = 0.0;
   double w_f2f_axial = 0.0;
   double w_f2f_nonaxial = 0.0;
   if (has_f2f_init) {
     selected_pose =
-      fuse_map_and_f2f_pose(map_pose, f2f_init_pose, map_fitness_score, f2f_init_score, &map_conf, &f2f_conf, &w_f2f_trans, &w_f2f_rot, &w_f2f_axial, &w_f2f_nonaxial);
+      fuse_map_and_f2f_pose(map_pose, f2f_init_pose, map_fitness_score, f2f_init_score, map_prior_mult, &map_conf, &f2f_conf, &w_f2f_trans, &w_f2f_rot, &w_f2f_axial, &w_f2f_nonaxial);
     pose_source = "fused_map_f2f";
+  } else {
+    map_conf = score_to_confidence(map_fitness_score) * std::max(map_prior_conf_floor, map_prior_mult);
   }
 
   Eigen::Matrix4f final_pose = selected_pose;
@@ -1015,7 +1211,8 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
                            << "q=[w " << q.w() << ", x " << q.x() << ", y " << q.y() << ", z " << q.z() << "] "
                            << "source=" << pose_source << " f2f_init_used=" << (has_f2f_init ? "true" : "false") << " map_converged=" << (map_converged ? "true" : "false")
                            << " map_score=" << map_fitness_score << " f2f_init_score=" << f2f_init_score << " map_conf=" << map_conf << " f2f_conf=" << f2f_conf
-                           << " w_f2f_t=" << w_f2f_trans << " w_f2f_r=" << w_f2f_rot << " w_f2f_ax=" << w_f2f_axial << " w_f2f_nonax=" << w_f2f_nonaxial);
+                           << " w_f2f_t=" << w_f2f_trans << " w_f2f_r=" << w_f2f_rot << " w_f2f_ax=" << w_f2f_axial << " w_f2f_nonax=" << w_f2f_nonaxial
+                           << " prior_mult=" << map_prior_mult << " prior_hit_ratio=" << map_prior_hit_ratio << " prior_avg_conf=" << map_prior_avg_conf);
 
   // 构造观测向量 observation（位置+四元数，共7维）,已 修正四元数正负
   Eigen::VectorXf observation(7);

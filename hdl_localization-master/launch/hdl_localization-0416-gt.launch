@@ -7,6 +7,7 @@
   <!-- this is useful to match the LIDAR and IMU coodinate systems -->
   <!-- <arg name="odom_child_frame_id" default="imu_link" /> -->
     <arg name="odom_child_frame_id" default="base_link" />
+    <!-- 车辆大小信息，高度在1.88-1.92之间，x在-0.91到2.12之间，y在-0.72到0.69之间。 -->
 
 
   <!-- ndt不用imu，gicp建议用，optional arguments，不用imu时除了use_global_localization全false， -->
@@ -15,12 +16,12 @@
   <arg name="invert_imu_gyro" default="false" />
   <arg name="use_global_localization" default="false" />
   <arg name="imu_topic" default="/localization/imu" />
-  <!-- 是否启动帧间位姿融合 -->
-  <arg name="enable_frame2frame_ndt" default="false" />
+  <!-- 是否启动帧间位姿融合,直接帧到帧的fast-gicp很抖 -->
+  <arg name="enable_frame2frame_ndt" default="true" />
   <!-- NDT_OMP,FAST_GICP -->
   <arg name="frame2frame_reg_method" default="FAST_GICP" />
   <arg name="enable_score_weighted_fusion" default="true" />
-  <arg name="f2f_score_confidence_gain" default="15.0" />
+  <arg name="f2f_score_confidence_gain" default="1000000.0" />
   <arg name="enable_axis_anisotropic_fusion" default="false" />
   <arg name="f2f_axial_conf_gain" default="2.0" />
   <arg name="f2f_nonaxial_conf_gain" default="0.5" />
@@ -92,7 +93,7 @@
       <param name="robot_odom_frame_id" value="$(arg robot_odom_frame_id)" />
       <!-- ndt settings -->
       <!-- available reg_methods:FAST_GICP, NDT_OMP, NDT_CUDA_P2D, NDT_CUDA_D2D，FAST_VGICP，GICP，FAST_VGICP,FAST_GICP-->
-      <param name="reg_method" value="FAST_GICP" />
+      <param name="reg_method" value="NDT_OMP" />
       <!-- if NDT is slow for your PC, try DIRECT1，DIRECT7，KDTREE serach method, which is a bit unstable but extremely fast -->
       <param name="ndt_neighbor_search_method" value="KDTREE" />
       <param name="ndt_neighbor_search_radius" value="2.0" />
@@ -137,6 +138,17 @@
       <param name="axis_max_delta_s" value="0.15" />
       <param name="axis_prealign_only_when_degenerate" value="false" />
       <param name="axis_postalign_only_when_degenerate" value="true" />
+      <!-- map prior voxel layer (core/band/inner/uncertain) -->
+      <param name="enable_map_prior_layer" value="true" />
+      <param name="map_prior_csv" value="/home/scy/catkin_ws_hdl_location/prior_layer_map_tuned_clean10_ascii/prior_voxel_layer_from_map.csv" />
+      <param name="map_prior_voxel_size" value="2.0" />
+      <param name="map_prior_sample_step" value="4" />
+      <param name="map_prior_min_hits" value="120" />
+      <param name="map_prior_core_gain" value="1.0" />
+      <param name="map_prior_band_gain" value="0.7" />
+      <param name="map_prior_inner_gain" value="0.25" />
+      <param name="map_prior_uncertain_gain" value="0.15" />
+      <param name="map_prior_conf_floor" value="0.2" />
       <!-- <param name="ndt_neighbor_search_radius" value="1.0" />
       <param name="ndt_resolution" value="0.6" /> -->
       <!-- 初始0.1，会有个别帧索引溢出的问题 -->
