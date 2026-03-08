@@ -18,7 +18,7 @@
   <arg name="imu_topic" default="/localization/imu" />
   <!-- 是否启动帧间位姿融合,直接帧到帧的fast-gicp很抖 -->
   <arg name="enable_frame2frame_ndt" default="true" />
-  <!-- NDT_OMP,FAST_GICP -->
+  <!-- NDT_OMP,FAST_GIC P -->
   <arg name="frame2frame_reg_method" default="FAST_GICP" />
   <arg name="enable_score_weighted_fusion" default="true" />
   <arg name="f2f_score_confidence_gain" default="1.0" />
@@ -27,6 +27,8 @@
   <arg name="f2f_nonaxial_conf_gain" default="0.25" />
   <arg name="map_axial_conf_gain" default="0.3" />
   <arg name="map_nonaxial_conf_gain" default="1.0" />
+  
+
   <arg name="enable_reg_debug_csv" default="true" />
   <arg name="reg_debug_csv_path" default="/home/scy/catkin_ws_hdl_location/reg_debug_0416_gt.csv" />
   <arg name="enable_robot_odometry_prediction" value="false" />
