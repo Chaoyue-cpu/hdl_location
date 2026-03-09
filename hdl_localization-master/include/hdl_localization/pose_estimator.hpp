@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <cstdint>
 #include <fstream>
+#include <deque>
 #include <boost/optional.hpp>
 #include <mutex>
 
@@ -62,6 +63,19 @@ public:
     double f2f_nonaxial_conf_gain = 0.5,
     double map_axial_conf_gain = 0.3,
     double map_nonaxial_conf_gain = 1.0,
+    bool enable_wall_r_axial_adaptation = false,
+    double wall_r_axial_beta = 1.0,
+    double wall_r_axial_scale_min = 1.0,
+    double wall_r_axial_scale_max = 2.5,
+    bool enable_inc_static_axial_adaptation = false,
+    int inc_static_window_size = 10,
+    int inc_static_min_hits = 3,
+    int inc_static_sample_step = 4,
+    int inc_static_min_unknown_voxels = 12,
+    double inc_static_beta = 1.0,
+    double inc_static_r_deadzone = 0.3,
+    double inc_static_scale_min = 1.0,
+    double inc_static_scale_max = 2.0,
     bool enable_f2f_confidence_filter = false,
     bool enable_f2f_dynamic_filter = false,
     double f2f_wall_y_threshold = 3.0,
@@ -173,6 +187,20 @@ private:
     const Eigen::Matrix4f& map_pose,
     double* out_hit_ratio = nullptr,
     double* out_avg_prior_conf = nullptr) const;
+  void compute_wall_observability_metrics(
+    const pcl::PointCloud<PointT>::ConstPtr& cloud,
+    const Eigen::Matrix4f& map_pose,
+    double* out_ratio_inner = nullptr,
+    double* out_relief_inner = nullptr,
+    double* out_r_wall = nullptr) const;
+  double compute_wall_r_axial_scale(double wall_r) const;
+  void compute_inc_static_metrics(
+    const pcl::PointCloud<PointT>::ConstPtr& cloud,
+    const Eigen::Matrix4f& map_pose,
+    double* out_unknown_ratio = nullptr,
+    double* out_stable_ratio = nullptr,
+    double* out_r_inc_static = nullptr);
+  double compute_inc_static_axial_scale(double r_inc_static) const;
   void write_reg_debug_row(
     const ros::Time& stamp,
     const std::string& pose_source,
@@ -190,6 +218,14 @@ private:
     double map_prior_mult,
     double map_prior_hit_ratio,
     double map_prior_avg_conf,
+    double wall_ratio_inner,
+    double wall_relief_inner,
+    double wall_r,
+    double wall_r_axial_scale,
+    double inc_unknown_ratio,
+    double inc_stable_ratio,
+    double r_inc_static,
+    double inc_static_axial_scale,
     const Eigen::Vector3f& p,
     const Eigen::Quaternionf& q);
 
@@ -226,6 +262,19 @@ private:
   double f2f_nonaxial_conf_gain;
   double map_axial_conf_gain;
   double map_nonaxial_conf_gain;
+  bool enable_wall_r_axial_adaptation;
+  double wall_r_axial_beta;
+  double wall_r_axial_scale_min;
+  double wall_r_axial_scale_max;
+  bool enable_inc_static_axial_adaptation;
+  int inc_static_window_size;
+  int inc_static_min_hits;
+  int inc_static_sample_step;
+  int inc_static_min_unknown_voxels;
+  double inc_static_beta;
+  double inc_static_r_deadzone;
+  double inc_static_scale_min;
+  double inc_static_scale_max;
   bool enable_f2f_confidence_filter;
   bool enable_f2f_dynamic_filter;
   double f2f_wall_y_threshold;
@@ -297,6 +346,10 @@ private:
   std::string reg_debug_csv_path;
   std::ofstream reg_debug_csv_stream;
   std::uint64_t reg_debug_seq;
+  double last_wall_r;
+  double last_r_inc_static;
+  std::deque<std::vector<PriorKey>> inc_static_unknown_history;
+  std::unordered_map<PriorKey, int, PriorKeyHash> inc_static_unknown_hit_counts;
   mutable std::mutex reg_debug_csv_mutex;
 
   pcl::Registration<PointT, PointT>::Ptr registration;

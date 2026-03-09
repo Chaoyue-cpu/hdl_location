@@ -76,6 +76,19 @@ PoseEstimator::PoseEstimator(
   double f2f_nonaxial_conf_gain,
   double map_axial_conf_gain,
   double map_nonaxial_conf_gain,
+  bool enable_wall_r_axial_adaptation,
+  double wall_r_axial_beta,
+  double wall_r_axial_scale_min,
+  double wall_r_axial_scale_max,
+  bool enable_inc_static_axial_adaptation,
+  int inc_static_window_size,
+  int inc_static_min_hits,
+  int inc_static_sample_step,
+  int inc_static_min_unknown_voxels,
+  double inc_static_beta,
+  double inc_static_r_deadzone,
+  double inc_static_scale_min,
+  double inc_static_scale_max,
   bool enable_f2f_confidence_filter,
   bool enable_f2f_dynamic_filter,
   double f2f_wall_y_threshold,
@@ -126,6 +139,19 @@ PoseEstimator::PoseEstimator(
   f2f_nonaxial_conf_gain(std::max(0.0, f2f_nonaxial_conf_gain)),
   map_axial_conf_gain(std::max(0.0, map_axial_conf_gain)),
   map_nonaxial_conf_gain(std::max(0.0, map_nonaxial_conf_gain)),
+  enable_wall_r_axial_adaptation(enable_wall_r_axial_adaptation),
+  wall_r_axial_beta(std::max(0.0, wall_r_axial_beta)),
+  wall_r_axial_scale_min(std::max(0.0, wall_r_axial_scale_min)),
+  wall_r_axial_scale_max(std::max(std::max(0.0, wall_r_axial_scale_min), wall_r_axial_scale_max)),
+  enable_inc_static_axial_adaptation(enable_inc_static_axial_adaptation),
+  inc_static_window_size(std::max(1, inc_static_window_size)),
+  inc_static_min_hits(std::max(1, inc_static_min_hits)),
+  inc_static_sample_step(std::max(1, inc_static_sample_step)),
+  inc_static_min_unknown_voxels(std::max(1, inc_static_min_unknown_voxels)),
+  inc_static_beta(std::max(0.0, inc_static_beta)),
+  inc_static_r_deadzone(std::max(0.0, std::min(0.99, inc_static_r_deadzone))),
+  inc_static_scale_min(std::max(0.0, inc_static_scale_min)),
+  inc_static_scale_max(std::max(std::max(0.0, inc_static_scale_min), inc_static_scale_max)),
   enable_f2f_confidence_filter(enable_f2f_confidence_filter),
   enable_f2f_dynamic_filter(enable_f2f_dynamic_filter),
   f2f_wall_y_threshold(std::max(0.0, f2f_wall_y_threshold)),
@@ -157,6 +183,8 @@ PoseEstimator::PoseEstimator(
   enable_reg_debug_csv(enable_reg_debug_csv),
   reg_debug_csv_path(reg_debug_csv_path),
   reg_debug_seq(0),
+  last_wall_r(0.0),
+  last_r_inc_static(0.0),
   last_map_degenerate(false),
   prev_map_pose(Eigen::Matrix4f::Identity()) {
   // 初始化最后一次观测的变换矩阵（4x4单位矩阵）
@@ -314,6 +342,8 @@ PoseEstimator::PoseEstimator(
           << "map_score,f2f_init_score,map_conf,f2f_conf,"
           << "w_f2f_t,w_f2f_r,w_f2f_ax,w_f2f_nonax,"
           << "prior_mult,prior_hit_ratio,prior_avg_conf,"
+          << "wall_ratio_inner,wall_relief_inner,wall_r,wall_r_axial_scale,"
+          << "inc_unknown_ratio,inc_stable_ratio,r_inc_static,inc_static_axial_scale,"
           << "px,py,pz,qw,qx,qy,qz\n";
         reg_debug_csv_stream.flush();
         ROS_INFO_STREAM("reg debug csv enabled: " << this->reg_debug_csv_path);
@@ -883,6 +913,241 @@ double PoseEstimator::compute_map_prior_conf_multiplier(
   return std::max(map_prior_conf_floor, std::min(1.5, avg));
 }
 
+void PoseEstimator::compute_wall_observability_metrics(
+  const pcl::PointCloud<PointT>::ConstPtr& cloud,
+  const Eigen::Matrix4f& map_pose,
+  double* out_ratio_inner,
+  double* out_relief_inner,
+  double* out_r_wall) const {
+  if (out_ratio_inner) *out_ratio_inner = 0.0;
+  if (out_relief_inner) *out_relief_inner = 0.0;
+  if (out_r_wall) *out_r_wall = 0.0;
+
+  if (!cloud || cloud->empty() || axis_centerline.size() < 2) {
+    return;
+  }
+
+  struct BinAcc {
+    int count = 0;
+    double sum_lateral = 0.0;
+    double sum_lateral2 = 0.0;
+  };
+
+  std::unordered_map<int, BinAcc> bins;
+  bins.reserve(128);
+
+  const int step = std::max(1, map_prior_sample_step);
+  constexpr double kBinSizeS = 1.0;          // 1m bins along axis
+  constexpr int kMinPointsPerBin = 8;        // sampled wall points
+  constexpr int kMinNonEmptyBins = 3;        // avoid unstable tiny frames
+  constexpr double kReliefRef = 0.15;        // normalization reference (m)
+  const double s0 = axis_centerline.front().s;
+
+  for (std::size_t i = 0; i < cloud->size(); i += static_cast<std::size_t>(step)) {
+    const auto& pt = cloud->points[i];
+    if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) {
+      continue;
+    }
+    if (!is_wall_point(pt)) {
+      continue;
+    }
+
+    const Eigen::Vector4f p_local(pt.x, pt.y, pt.z, 1.0f);
+    const Eigen::Vector4f p_map4 = map_pose * p_local;
+    const Eigen::Vector3f p_map = p_map4.head<3>();
+
+    double s = 0.0;
+    double lateral = 0.0;
+    if (!project_to_axis(p_map, &s, &lateral)) {
+      continue;
+    }
+
+    const int bin = static_cast<int>(std::floor((s - s0) / kBinSizeS));
+    auto& b = bins[bin];
+    b.count += 1;
+    b.sum_lateral += lateral;
+    b.sum_lateral2 += lateral * lateral;
+  }
+
+  const int non_empty_bins = static_cast<int>(bins.size());
+  if (non_empty_bins < kMinNonEmptyBins) {
+    return;
+  }
+
+  int valid_bins = 0;
+  std::vector<std::pair<int, double>> std_bins;
+  std_bins.reserve(bins.size());
+  for (const auto& kv : bins) {
+    const auto& b = kv.second;
+    if (b.count < kMinPointsPerBin) {
+      continue;
+    }
+    const double mean = b.sum_lateral / static_cast<double>(b.count);
+    const double var = std::max(0.0, b.sum_lateral2 / static_cast<double>(b.count) - mean * mean);
+    const double stdv = std::sqrt(var);
+    std_bins.emplace_back(kv.first, stdv);
+    valid_bins += 1;
+  }
+
+  const double ratio_inner = static_cast<double>(valid_bins) / static_cast<double>(non_empty_bins);
+
+  double relief_raw = 0.0;
+  if (std_bins.size() >= 2) {
+    std::sort(std_bins.begin(), std_bins.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    double sum_diff = 0.0;
+    int num_diff = 0;
+    for (std::size_t i = 1; i < std_bins.size(); ++i) {
+      // Ignore very large bin gaps to keep the metric local.
+      if (std::abs(std_bins[i].first - std_bins[i - 1].first) > 2) {
+        continue;
+      }
+      sum_diff += std::abs(std_bins[i].second - std_bins[i - 1].second);
+      num_diff += 1;
+    }
+    if (num_diff > 0) {
+      relief_raw = sum_diff / static_cast<double>(num_diff);
+    }
+  }
+
+  const auto clamp01 = [](double v) { return std::max(0.0, std::min(1.0, v)); };
+  const double relief_inner = clamp01(relief_raw / kReliefRef);
+  const double r_wall = clamp01(0.6 * ratio_inner + 0.4 * relief_inner);
+
+  if (out_ratio_inner) *out_ratio_inner = ratio_inner;
+  if (out_relief_inner) *out_relief_inner = relief_inner;
+  if (out_r_wall) *out_r_wall = r_wall;
+}
+
+double PoseEstimator::compute_wall_r_axial_scale(double wall_r) const {
+  if (!enable_wall_r_axial_adaptation) {
+    return 1.0;
+  }
+  const double r = std::max(0.0, std::min(1.0, wall_r));
+  const double raw_scale = 1.0 + wall_r_axial_beta * r;
+  return std::max(wall_r_axial_scale_min, std::min(wall_r_axial_scale_max, raw_scale));
+}
+
+void PoseEstimator::compute_inc_static_metrics(
+  const pcl::PointCloud<PointT>::ConstPtr& cloud,
+  const Eigen::Matrix4f& map_pose,
+  double* out_unknown_ratio,
+  double* out_stable_ratio,
+  double* out_r_inc_static) {
+  if (out_unknown_ratio) *out_unknown_ratio = 0.0;
+  if (out_stable_ratio) *out_stable_ratio = 0.0;
+  if (out_r_inc_static) *out_r_inc_static = 0.0;
+
+  if (!cloud || cloud->empty() || map_prior_cells.empty()) {
+    return;
+  }
+
+  const int step = std::max(1, inc_static_sample_step);
+  const double inv = 1.0 / std::max(map_prior_voxel_size, 0.1);
+  int tested = 0;
+  int unknown_points = 0;
+  std::unordered_set<PriorKey, PriorKeyHash> unknown_keys;
+  unknown_keys.reserve(512);
+
+  for (std::size_t i = 0; i < cloud->size(); i += static_cast<std::size_t>(step)) {
+    const auto& pt = cloud->points[i];
+    if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) {
+      continue;
+    }
+    ++tested;
+
+    const Eigen::Vector4f p_local(pt.x, pt.y, pt.z, 1.0f);
+    const Eigen::Vector4f p_map = map_pose * p_local;
+    PriorKey key;
+    key.x = static_cast<int>(std::floor(p_map.x() * inv));
+    key.y = static_cast<int>(std::floor(p_map.y() * inv));
+    key.z = static_cast<int>(std::floor(p_map.z() * inv));
+
+    auto it = map_prior_cells.find(key);
+    const bool is_unknown = (it == map_prior_cells.end()) || (it->second.class_id == 0);
+    if (!is_unknown) {
+      continue;
+    }
+
+    ++unknown_points;
+    unknown_keys.insert(key);
+  }
+
+  if (tested <= 0) {
+    return;
+  }
+
+  const double unknown_ratio = static_cast<double>(unknown_points) / static_cast<double>(tested);
+
+  std::vector<PriorKey> frame_unknown;
+  frame_unknown.reserve(unknown_keys.size());
+  for (const auto& key : unknown_keys) {
+    frame_unknown.push_back(key);
+    inc_static_unknown_hit_counts[key] += 1;
+  }
+  inc_static_unknown_history.push_back(std::move(frame_unknown));
+
+  while (static_cast<int>(inc_static_unknown_history.size()) > inc_static_window_size) {
+    const auto& old = inc_static_unknown_history.front();
+    for (const auto& key : old) {
+      auto it = inc_static_unknown_hit_counts.find(key);
+      if (it == inc_static_unknown_hit_counts.end()) {
+        continue;
+      }
+      it->second -= 1;
+      if (it->second <= 0) {
+        inc_static_unknown_hit_counts.erase(it);
+      }
+    }
+    inc_static_unknown_history.pop_front();
+  }
+
+  double stable_ratio = 0.0;
+  if (static_cast<int>(unknown_keys.size()) >= inc_static_min_unknown_voxels) {
+    int stable_keys = 0;
+    for (const auto& key : unknown_keys) {
+      auto it = inc_static_unknown_hit_counts.find(key);
+      if (it != inc_static_unknown_hit_counts.end() && it->second >= inc_static_min_hits) {
+        stable_keys += 1;
+      }
+    }
+    stable_ratio = static_cast<double>(stable_keys) / static_cast<double>(unknown_keys.size());
+  }
+
+  const auto clamp01 = [](double v) { return std::max(0.0, std::min(1.0, v)); };
+  const double r_inc_static = clamp01(unknown_ratio * stable_ratio);
+
+  if (out_unknown_ratio) *out_unknown_ratio = unknown_ratio;
+  if (out_stable_ratio) *out_stable_ratio = stable_ratio;
+  if (out_r_inc_static) *out_r_inc_static = r_inc_static;
+}
+
+double PoseEstimator::compute_inc_static_axial_scale(double r_inc_static) const {
+  if (!enable_inc_static_axial_adaptation) {
+    return 1.0;
+  }
+  const double lo = std::min(inc_static_scale_min, inc_static_scale_max);
+  const double hi = std::max(inc_static_scale_min, inc_static_scale_max);
+  const double neutral = std::max(lo, std::min(hi, 1.0));
+  const double r = std::max(0.0, std::min(1.0, r_inc_static));
+  if (r <= inc_static_r_deadzone) {
+    return neutral;
+  }
+  const double active = std::max(0.0, std::min(1.0, (r - inc_static_r_deadzone) / std::max(1e-6, 1.0 - inc_static_r_deadzone)));
+
+  // Up-weight mode: allowed range entirely above 1.0 (or spans 1.0 with upward preference).
+  // Down-weight mode: allowed range entirely below 1.0.
+  // beta controls the maximum deviation from 1.0, while [lo, hi] bounds the final scale.
+  double target = neutral;
+  if (hi <= 1.0 + 1e-9) {
+    target = std::max(lo, 1.0 - inc_static_beta);
+  } else {
+    target = std::min(hi, 1.0 + inc_static_beta);
+  }
+
+  const double raw_scale = neutral + (target - neutral) * active;
+  return std::max(lo, std::min(hi, raw_scale));
+}
+
 void PoseEstimator::write_reg_debug_row(
   const ros::Time& stamp,
   const std::string& pose_source,
@@ -900,6 +1165,14 @@ void PoseEstimator::write_reg_debug_row(
   double map_prior_mult,
   double map_prior_hit_ratio,
   double map_prior_avg_conf,
+  double wall_ratio_inner,
+  double wall_relief_inner,
+  double wall_r,
+  double wall_r_axial_scale,
+  double inc_unknown_ratio,
+  double inc_stable_ratio,
+  double r_inc_static,
+  double inc_static_axial_scale,
   const Eigen::Vector3f& p,
   const Eigen::Quaternionf& q) {
   if (!enable_reg_debug_csv || !reg_debug_csv_stream.is_open()) {
@@ -924,6 +1197,14 @@ void PoseEstimator::write_reg_debug_row(
                        << map_prior_mult << ","
                        << map_prior_hit_ratio << ","
                        << map_prior_avg_conf << ","
+                       << wall_ratio_inner << ","
+                       << wall_relief_inner << ","
+                       << wall_r << ","
+                       << wall_r_axial_scale << ","
+                       << inc_unknown_ratio << ","
+                       << inc_stable_ratio << ","
+                       << r_inc_static << ","
+                       << inc_static_axial_scale << ","
                        << p.x() << ","
                        << p.y() << ","
                        << p.z() << ","
@@ -998,9 +1279,12 @@ Eigen::Matrix4f PoseEstimator::fuse_map_and_f2f_pose(
         const Eigen::Vector3f delta_axial = delta.dot(axis_tangent) * axis_tangent;
         const Eigen::Vector3f delta_nonaxial = delta - delta_axial;
 
+        const double wall_r_axial_scale = compute_wall_r_axial_scale(last_wall_r);
+        const double inc_static_axial_scale = compute_inc_static_axial_scale(last_r_inc_static);
+        const double adaptive_axial_scale = std::max(0.0, std::min(5.0, wall_r_axial_scale * inc_static_axial_scale));
         const double inv_map_axial = (map_conf * map_axial_conf_gain) / map_trans_var;
         const double inv_map_nonaxial = (map_conf * map_nonaxial_conf_gain) / map_trans_var;
-        const double inv_f2f_axial = (f2f_conf * f2f_axial_conf_gain) / f2f_trans_var;
+        const double inv_f2f_axial = (f2f_conf * f2f_axial_conf_gain * adaptive_axial_scale) / f2f_trans_var;
         const double inv_f2f_nonaxial = (f2f_conf * f2f_nonaxial_conf_gain) / f2f_trans_var;
         w_f2f_axial = inv_f2f_axial / std::max(inv_map_axial + inv_f2f_axial, 1e-9);
         w_f2f_nonaxial = inv_f2f_nonaxial / std::max(inv_map_nonaxial + inv_f2f_nonaxial, 1e-9);
@@ -1280,6 +1564,18 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   double map_prior_mult = 1.0;
   double map_prior_hit_ratio = 0.0;
   double map_prior_avg_conf = 0.0;
+  double wall_ratio_inner = 0.0;
+  double wall_relief_inner = 0.0;
+  double wall_r = 0.0;
+  compute_wall_observability_metrics(cloud, map_pose, &wall_ratio_inner, &wall_relief_inner, &wall_r);
+  last_wall_r = wall_r;
+  const double wall_r_axial_scale = compute_wall_r_axial_scale(wall_r);
+  double inc_unknown_ratio = 0.0;
+  double inc_stable_ratio = 0.0;
+  double r_inc_static = 0.0;
+  compute_inc_static_metrics(cloud, map_pose, &inc_unknown_ratio, &inc_stable_ratio, &r_inc_static);
+  last_r_inc_static = r_inc_static;
+  const double inc_static_axial_scale = compute_inc_static_axial_scale(r_inc_static);
   if (enable_map_prior_layer) {
     map_prior_mult = compute_map_prior_conf_multiplier(cloud, map_pose, &map_prior_hit_ratio, &map_prior_avg_conf);
   }
@@ -1318,7 +1614,11 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
                            << "source=" << pose_source << " f2f_init_used=" << (has_f2f_init ? "true" : "false") << " map_converged=" << (map_converged ? "true" : "false")
                            << " map_score=" << map_fitness_score << " f2f_init_score=" << f2f_init_score << " map_conf=" << map_conf << " f2f_conf=" << f2f_conf
                            << " w_f2f_t=" << w_f2f_trans << " w_f2f_r=" << w_f2f_rot << " w_f2f_ax=" << w_f2f_axial << " w_f2f_nonax=" << w_f2f_nonaxial
-                           << " prior_mult=" << map_prior_mult << " prior_hit_ratio=" << map_prior_hit_ratio << " prior_avg_conf=" << map_prior_avg_conf);
+                           << " prior_mult=" << map_prior_mult << " prior_hit_ratio=" << map_prior_hit_ratio << " prior_avg_conf=" << map_prior_avg_conf
+                           << " wall_ratio_inner=" << wall_ratio_inner << " wall_relief_inner=" << wall_relief_inner << " wall_r=" << wall_r
+                           << " wall_r_axial_scale=" << wall_r_axial_scale
+                           << " inc_unknown_ratio=" << inc_unknown_ratio << " inc_stable_ratio=" << inc_stable_ratio
+                           << " r_inc_static=" << r_inc_static << " inc_static_axial_scale=" << inc_static_axial_scale);
   write_reg_debug_row(
     stamp,
     pose_source,
@@ -1336,6 +1636,14 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
     map_prior_mult,
     map_prior_hit_ratio,
     map_prior_avg_conf,
+    wall_ratio_inner,
+    wall_relief_inner,
+    wall_r,
+    wall_r_axial_scale,
+    inc_unknown_ratio,
+    inc_stable_ratio,
+    r_inc_static,
+    inc_static_axial_scale,
     p,
     q);
 

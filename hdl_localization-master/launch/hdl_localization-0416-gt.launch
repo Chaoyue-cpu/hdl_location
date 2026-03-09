@@ -21,12 +21,36 @@
   <!-- NDT_OMP,FAST_GIC P -->
   <arg name="frame2frame_reg_method" default="FAST_GICP" />
   <arg name="enable_score_weighted_fusion" default="true" />
-  <arg name="f2f_score_confidence_gain" default="1.0" />
+  <!-- 为0时，只提供初值，不提供后面的融合 -->
+  <arg name="f2f_score_confidence_gain" default="0.5" />
   <arg name="enable_axis_anisotropic_fusion" default="true" />
+  <!-- 固定参数1.0比0.7好 -->
   <arg name="f2f_axial_conf_gain" default="1.0" />
   <arg name="f2f_nonaxial_conf_gain" default="0.25" />
   <arg name="map_axial_conf_gain" default="0.3" />
   <arg name="map_nonaxial_conf_gain" default="1.0" />
+  <arg name="enable_wall_r_axial_adaptation" default="false" />
+  <arg name="wall_r_axial_beta" default="1.0" />
+  <arg name="wall_r_axial_scale_min" default="1.0" />
+  <arg name="wall_r_axial_scale_max" default="2.5" />
+  <!-- 增量静态结构轴向自适应：根据 r_inc_static 调整轴向 f2f 信息权重 -->
+  <arg name="enable_inc_static_axial_adaptation" default="true" />
+  <!-- 时序窗口长度（帧数）。越大越平滑、触发更严格，但响应更慢 -->
+  <arg name="inc_static_window_size" default="15" />
+  <!-- 单个未知体素在窗口内至少出现多少次才记为“稳定未知体素” -->
+  <arg name="inc_static_min_hits" default="15" />
+  <!-- 当前帧点云下采样步长。越大计算越快，但统计更粗 -->
+  <arg name="inc_static_sample_step" default="4" />
+  <!-- 当前帧未知体素数量门槛：未达到该数量时，不计算 stable_ratio（直接按0处理） -->
+  <arg name="inc_static_min_unknown_voxels" default="20" />
+  <!-- 轴向自适应强度：以 1.0 为基准，死区外按 beta 朝目标缩放，并限制在 [min,max] -->
+  <arg name="inc_static_beta" default="0.05" />
+  <!-- r_inc_static 死区阈值：低于该值时强制 scale=1.0，仅高于阈值才开始增益 -->
+  <arg name="inc_static_r_deadzone" default="0.25" />
+  <!-- 轴向自适应缩放下界 -->
+  <arg name="inc_static_scale_min" default="1.0" />
+  <!-- 轴向自适应缩放上界 -->
+  <arg name="inc_static_scale_max" default="1.5" />
   
 
   <arg name="enable_reg_debug_csv" default="true" />
@@ -124,6 +148,19 @@
       <param name="f2f_nonaxial_conf_gain" value="$(arg f2f_nonaxial_conf_gain)" />
       <param name="map_axial_conf_gain" value="$(arg map_axial_conf_gain)" />
       <param name="map_nonaxial_conf_gain" value="$(arg map_nonaxial_conf_gain)" />
+      <param name="enable_wall_r_axial_adaptation" value="$(arg enable_wall_r_axial_adaptation)" />
+      <param name="wall_r_axial_beta" value="$(arg wall_r_axial_beta)" />
+      <param name="wall_r_axial_scale_min" value="$(arg wall_r_axial_scale_min)" />
+      <param name="wall_r_axial_scale_max" value="$(arg wall_r_axial_scale_max)" />
+      <param name="enable_inc_static_axial_adaptation" value="$(arg enable_inc_static_axial_adaptation)" />
+      <param name="inc_static_window_size" value="$(arg inc_static_window_size)" />
+      <param name="inc_static_min_hits" value="$(arg inc_static_min_hits)" />
+      <param name="inc_static_sample_step" value="$(arg inc_static_sample_step)" />
+      <param name="inc_static_min_unknown_voxels" value="$(arg inc_static_min_unknown_voxels)" />
+      <param name="inc_static_beta" value="$(arg inc_static_beta)" />
+      <param name="inc_static_r_deadzone" value="$(arg inc_static_r_deadzone)" />
+      <param name="inc_static_scale_min" value="$(arg inc_static_scale_min)" />
+      <param name="inc_static_scale_max" value="$(arg inc_static_scale_max)" />
       <!-- lightweight f2f confidence filtering (default off) -->
       <param name="enable_f2f_confidence_filter" value="true" />
       <param name="enable_f2f_dynamic_filter" value="true" />
