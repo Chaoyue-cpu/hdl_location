@@ -320,12 +320,29 @@ PoseEstimator::PoseEstimator(
     }
   }
 
-  if (this->enable_map_prior_layer) {
+  // Keep the original inc_static interface semantics:
+  // as long as the axial static adaptation is enabled, the prior voxel table is
+  // still loaded as the unknown-voxel reference, even if map prior fusion is off.
+  const bool need_map_prior_cells = this->enable_map_prior_layer || this->enable_inc_static_axial_adaptation;
+  if (need_map_prior_cells) {
     if (!load_map_prior_csv(map_prior_csv)) {
-      ROS_WARN_STREAM("map prior layer disabled: failed to load csv: " << map_prior_csv);
-      this->enable_map_prior_layer = false;
+      if (this->enable_map_prior_layer) {
+        ROS_WARN_STREAM("map prior layer disabled: failed to load csv: " << map_prior_csv);
+        this->enable_map_prior_layer = false;
+      }
+      if (this->enable_inc_static_axial_adaptation) {
+        ROS_WARN_STREAM("inc_static axial adaptation will be ineffective: failed to load prior voxel csv: " << map_prior_csv);
+      }
     } else {
-      ROS_INFO_STREAM("map prior layer loaded: cells=" << map_prior_cells.size() << " voxel_size=" << map_prior_voxel_size);
+      if (this->enable_map_prior_layer && this->enable_inc_static_axial_adaptation) {
+        ROS_INFO_STREAM("map prior voxel table loaded for map prior fusion and inc_static: cells=" << map_prior_cells.size()
+                        << " voxel_size=" << map_prior_voxel_size);
+      } else if (this->enable_map_prior_layer) {
+        ROS_INFO_STREAM("map prior layer loaded: cells=" << map_prior_cells.size() << " voxel_size=" << map_prior_voxel_size);
+      } else {
+        ROS_INFO_STREAM("map prior voxel table loaded for inc_static reference only: cells=" << map_prior_cells.size()
+                        << " voxel_size=" << map_prior_voxel_size);
+      }
     }
   }
 
