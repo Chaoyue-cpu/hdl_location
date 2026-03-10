@@ -111,6 +111,7 @@ PoseEstimator::PoseEstimator(
   bool axis_prealign_only_when_degenerate,
   bool axis_postalign_only_when_degenerate,
   bool enable_map_prior_layer,
+  bool enable_map_prior_nonaxial_adaptation,
   const std::string& map_prior_csv,
   double map_prior_voxel_size,
   int map_prior_sample_step,
@@ -172,6 +173,7 @@ PoseEstimator::PoseEstimator(
   axis_prealign_only_when_degenerate(axis_prealign_only_when_degenerate),
   axis_postalign_only_when_degenerate(axis_postalign_only_when_degenerate),
   enable_map_prior_layer(enable_map_prior_layer),
+  enable_map_prior_nonaxial_adaptation(enable_map_prior_nonaxial_adaptation),
   map_prior_voxel_size(std::max(0.1, map_prior_voxel_size)),
   map_prior_sample_step(std::max(1, map_prior_sample_step)),
   map_prior_min_hits(std::max(10, map_prior_min_hits)),
@@ -339,9 +341,9 @@ PoseEstimator::PoseEstimator(
       } else {
         reg_debug_csv_stream
           << "seq,stamp,pose_source,f2f_init_used,map_converged,map_degenerate,"
-          << "map_score,f2f_init_score,map_conf,f2f_conf,"
+          << "map_score,f2f_init_score,map_conf_raw,map_conf,f2f_conf,"
           << "w_f2f_t,w_f2f_r,w_f2f_ax,w_f2f_nonax,"
-          << "prior_mult,prior_hit_ratio,prior_avg_conf,"
+          << "prior_mult,prior_hit_ratio,prior_avg_conf,prior_core_hit_ratio,prior_band_hit_ratio,prior_inner_hit_ratio,"
           << "wall_ratio_inner,wall_relief_inner,wall_r,wall_r_axial_scale,"
           << "inc_unknown_ratio,inc_stable_ratio,r_inc_static,inc_static_axial_scale,"
           << "px,py,pz,qw,qx,qy,qz\n";
@@ -857,10 +859,16 @@ double PoseEstimator::compute_map_prior_conf_multiplier(
   const pcl::PointCloud<PointT>::ConstPtr& cloud,
   const Eigen::Matrix4f& map_pose,
   double* out_hit_ratio,
-  double* out_avg_prior_conf) const {
+  double* out_avg_prior_conf,
+  double* out_core_hit_ratio,
+  double* out_band_hit_ratio,
+  double* out_inner_hit_ratio) const {
   if (!enable_map_prior_layer || map_prior_cells.empty() || !cloud || cloud->empty()) {
     if (out_hit_ratio) *out_hit_ratio = 0.0;
     if (out_avg_prior_conf) *out_avg_prior_conf = 0.0;
+    if (out_core_hit_ratio) *out_core_hit_ratio = 0.0;
+    if (out_band_hit_ratio) *out_band_hit_ratio = 0.0;
+    if (out_inner_hit_ratio) *out_inner_hit_ratio = 0.0;
     return 1.0;
   }
 
@@ -869,6 +877,9 @@ double PoseEstimator::compute_map_prior_conf_multiplier(
   double sum_conf = 0.0;
   int hits = 0;
   int tested = 0;
+  int core_hits = 0;
+  int band_hits = 0;
+  int inner_hits = 0;
 
   for (std::size_t i = 0; i < cloud->size(); i += static_cast<std::size_t>(map_prior_sample_step)) {
     const auto& pt = cloud->points[i];
@@ -897,20 +908,34 @@ double PoseEstimator::compute_map_prior_conf_multiplier(
     sum += conf * cls_gain;
     sum_conf += conf;
     ++hits;
+    if (it->second.class_id == 3) {
+      ++core_hits;
+    } else if (it->second.class_id == 2) {
+      ++band_hits;
+    } else if (it->second.class_id == 1) {
+      ++inner_hits;
+    }
   }
 
   const double hit_ratio = tested > 0 ? static_cast<double>(hits) / static_cast<double>(tested) : 0.0;
   const double avg_conf = hits > 0 ? sum_conf / static_cast<double>(hits) : 0.0;
+  const double core_hit_ratio = tested > 0 ? static_cast<double>(core_hits) / static_cast<double>(tested) : 0.0;
+  const double band_hit_ratio = tested > 0 ? static_cast<double>(band_hits) / static_cast<double>(tested) : 0.0;
+  const double inner_hit_ratio = tested > 0 ? static_cast<double>(inner_hits) / static_cast<double>(tested) : 0.0;
   if (out_hit_ratio) *out_hit_ratio = hit_ratio;
   if (out_avg_prior_conf) *out_avg_prior_conf = avg_conf;
+  if (out_core_hit_ratio) *out_core_hit_ratio = core_hit_ratio;
+  if (out_band_hit_ratio) *out_band_hit_ratio = band_hit_ratio;
+  if (out_inner_hit_ratio) *out_inner_hit_ratio = inner_hit_ratio;
 
   if (hits < map_prior_min_hits) {
     return 1.0;
   }
 
   const double avg = sum / static_cast<double>(hits);
-  // Map confidence multiplier; clamp to avoid overly aggressive reweighting.
-  return std::max(map_prior_conf_floor, std::min(1.5, avg));
+  // The voxel prior is intentionally penalty-only: it may reduce map confidence
+  // in structurally unsupported areas, but it must not boost map confidence.
+  return std::max(map_prior_conf_floor, std::min(1.0, avg));
 }
 
 void PoseEstimator::compute_wall_observability_metrics(
@@ -1018,8 +1043,11 @@ void PoseEstimator::compute_wall_observability_metrics(
   if (out_r_wall) *out_r_wall = r_wall;
 }
 
-double PoseEstimator::compute_wall_r_axial_scale(double wall_r) const {
+double PoseEstimator::compute_wall_r_axial_scale(double wall_r, bool map_converged, double map_fitness_score) const {
   if (!enable_wall_r_axial_adaptation) {
+    return 1.0;
+  }
+  if (!map_converged || !std::isfinite(map_fitness_score) || map_fitness_score > ndt_score_good) {
     return 1.0;
   }
   const double r = std::max(0.0, std::min(1.0, wall_r));
@@ -1156,6 +1184,7 @@ void PoseEstimator::write_reg_debug_row(
   bool map_degenerate,
   double map_fitness_score,
   double f2f_fitness_score,
+  double map_conf_raw,
   double map_conf,
   double f2f_conf,
   double w_f2f_trans,
@@ -1165,6 +1194,9 @@ void PoseEstimator::write_reg_debug_row(
   double map_prior_mult,
   double map_prior_hit_ratio,
   double map_prior_avg_conf,
+  double map_prior_core_hit_ratio,
+  double map_prior_band_hit_ratio,
+  double map_prior_inner_hit_ratio,
   double wall_ratio_inner,
   double wall_relief_inner,
   double wall_r,
@@ -1188,6 +1220,7 @@ void PoseEstimator::write_reg_debug_row(
                        << (map_degenerate ? 1 : 0) << ","
                        << map_fitness_score << ","
                        << f2f_fitness_score << ","
+                       << map_conf_raw << ","
                        << map_conf << ","
                        << f2f_conf << ","
                        << w_f2f_trans << ","
@@ -1197,6 +1230,9 @@ void PoseEstimator::write_reg_debug_row(
                        << map_prior_mult << ","
                        << map_prior_hit_ratio << ","
                        << map_prior_avg_conf << ","
+                       << map_prior_core_hit_ratio << ","
+                       << map_prior_band_hit_ratio << ","
+                       << map_prior_inner_hit_ratio << ","
                        << wall_ratio_inner << ","
                        << wall_relief_inner << ","
                        << wall_r << ","
@@ -1231,9 +1267,10 @@ double PoseEstimator::score_to_confidence(double score) const {
 Eigen::Matrix4f PoseEstimator::fuse_map_and_f2f_pose(
   const Eigen::Matrix4f& map_pose,
   const Eigen::Matrix4f& f2f_pose,
+  bool map_converged,
   double map_fitness_score,
   double f2f_fitness_score,
-  double map_conf_multiplier,
+  double map_nonaxial_prior_multiplier,
   double* out_map_conf,
   double* out_f2f_conf,
   double* out_w_f2f_trans,
@@ -1251,7 +1288,6 @@ Eigen::Matrix4f PoseEstimator::fuse_map_and_f2f_pose(
     map_conf = score_to_confidence(map_fitness_score);
     f2f_conf = score_to_confidence(f2f_fitness_score) * f2f_score_confidence_gain;
   }
-  map_conf *= std::max(map_prior_conf_floor, map_conf_multiplier);
 
   const double inv_map_trans = map_conf / map_trans_var;
   const double inv_f2f_trans = f2f_conf / f2f_trans_var;
@@ -1279,12 +1315,17 @@ Eigen::Matrix4f PoseEstimator::fuse_map_and_f2f_pose(
         const Eigen::Vector3f delta_axial = delta.dot(axis_tangent) * axis_tangent;
         const Eigen::Vector3f delta_nonaxial = delta - delta_axial;
 
-        const double wall_r_axial_scale = compute_wall_r_axial_scale(last_wall_r);
+        const double wall_r_axial_scale = compute_wall_r_axial_scale(last_wall_r, map_converged, map_fitness_score);
         const double inc_static_axial_scale = compute_inc_static_axial_scale(last_r_inc_static);
-        const double adaptive_axial_scale = std::max(0.0, std::min(5.0, wall_r_axial_scale * inc_static_axial_scale));
-        const double inv_map_axial = (map_conf * map_axial_conf_gain) / map_trans_var;
-        const double inv_map_nonaxial = (map_conf * map_nonaxial_conf_gain) / map_trans_var;
-        const double inv_f2f_axial = (f2f_conf * f2f_axial_conf_gain * adaptive_axial_scale) / f2f_trans_var;
+        // Strong local wall structure should increase the map-side axial evidence,
+        // while persistent unknown structure should only temper the f2f-side axial evidence.
+        const double adaptive_map_axial_scale = std::max(0.0, std::min(5.0, wall_r_axial_scale));
+        const double adaptive_f2f_axial_scale = std::max(0.0, std::min(5.0, inc_static_axial_scale));
+        const double adaptive_map_nonaxial_scale =
+          enable_map_prior_nonaxial_adaptation ? std::max(0.0, std::min(1.0, map_nonaxial_prior_multiplier)) : 1.0;
+        const double inv_map_axial = (map_conf * map_axial_conf_gain * adaptive_map_axial_scale) / map_trans_var;
+        const double inv_map_nonaxial = (map_conf * map_nonaxial_conf_gain * adaptive_map_nonaxial_scale) / map_trans_var;
+        const double inv_f2f_axial = (f2f_conf * f2f_axial_conf_gain * adaptive_f2f_axial_scale) / f2f_trans_var;
         const double inv_f2f_nonaxial = (f2f_conf * f2f_nonaxial_conf_gain) / f2f_trans_var;
         w_f2f_axial = inv_f2f_axial / std::max(inv_map_axial + inv_f2f_axial, 1e-9);
         w_f2f_nonaxial = inv_f2f_nonaxial / std::max(inv_map_nonaxial + inv_f2f_nonaxial, 1e-9);
@@ -1560,16 +1601,20 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   Eigen::Matrix4f selected_pose = map_pose;
   std::string pose_source = "map_only";
   double map_conf = 1.0;
+  const double map_conf_raw = enable_score_weighted_fusion ? score_to_confidence(map_fitness_score) : 1.0;
   double f2f_conf = 0.0;
   double map_prior_mult = 1.0;
   double map_prior_hit_ratio = 0.0;
   double map_prior_avg_conf = 0.0;
+  double map_prior_core_hit_ratio = 0.0;
+  double map_prior_band_hit_ratio = 0.0;
+  double map_prior_inner_hit_ratio = 0.0;
   double wall_ratio_inner = 0.0;
   double wall_relief_inner = 0.0;
   double wall_r = 0.0;
   compute_wall_observability_metrics(cloud, map_pose, &wall_ratio_inner, &wall_relief_inner, &wall_r);
   last_wall_r = wall_r;
-  const double wall_r_axial_scale = compute_wall_r_axial_scale(wall_r);
+  const double wall_r_axial_scale = compute_wall_r_axial_scale(wall_r, map_converged, map_fitness_score);
   double inc_unknown_ratio = 0.0;
   double inc_stable_ratio = 0.0;
   double r_inc_static = 0.0;
@@ -1577,7 +1622,14 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   last_r_inc_static = r_inc_static;
   const double inc_static_axial_scale = compute_inc_static_axial_scale(r_inc_static);
   if (enable_map_prior_layer) {
-    map_prior_mult = compute_map_prior_conf_multiplier(cloud, map_pose, &map_prior_hit_ratio, &map_prior_avg_conf);
+    map_prior_mult = compute_map_prior_conf_multiplier(
+      cloud,
+      map_pose,
+      &map_prior_hit_ratio,
+      &map_prior_avg_conf,
+      &map_prior_core_hit_ratio,
+      &map_prior_band_hit_ratio,
+      &map_prior_inner_hit_ratio);
   }
   double w_f2f_trans = 0.0;
   double w_f2f_rot = 0.0;
@@ -1585,10 +1637,10 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   double w_f2f_nonaxial = 0.0;
   if (has_f2f_init) {
     selected_pose =
-      fuse_map_and_f2f_pose(map_pose, f2f_init_pose, map_fitness_score, f2f_init_score, map_prior_mult, &map_conf, &f2f_conf, &w_f2f_trans, &w_f2f_rot, &w_f2f_axial, &w_f2f_nonaxial);
+      fuse_map_and_f2f_pose(map_pose, f2f_init_pose, map_converged, map_fitness_score, f2f_init_score, map_prior_mult, &map_conf, &f2f_conf, &w_f2f_trans, &w_f2f_rot, &w_f2f_axial, &w_f2f_nonaxial);
     pose_source = "fused_map_f2f";
   } else {
-    map_conf = score_to_confidence(map_fitness_score) * std::max(map_prior_conf_floor, map_prior_mult);
+    map_conf = map_conf_raw;
   }
 
   Eigen::Matrix4f final_pose = selected_pose;
@@ -1612,9 +1664,12 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
     "[REG] final pose p=[" << p.x() << ", " << p.y() << ", " << p.z() << "] "
                            << "q=[w " << q.w() << ", x " << q.x() << ", y " << q.y() << ", z " << q.z() << "] "
                            << "source=" << pose_source << " f2f_init_used=" << (has_f2f_init ? "true" : "false") << " map_converged=" << (map_converged ? "true" : "false")
-                           << " map_score=" << map_fitness_score << " f2f_init_score=" << f2f_init_score << " map_conf=" << map_conf << " f2f_conf=" << f2f_conf
+                           << " map_score=" << map_fitness_score << " f2f_init_score=" << f2f_init_score << " map_conf_raw=" << map_conf_raw
+                           << " map_conf=" << map_conf << " f2f_conf=" << f2f_conf
                            << " w_f2f_t=" << w_f2f_trans << " w_f2f_r=" << w_f2f_rot << " w_f2f_ax=" << w_f2f_axial << " w_f2f_nonax=" << w_f2f_nonaxial
                            << " prior_mult=" << map_prior_mult << " prior_hit_ratio=" << map_prior_hit_ratio << " prior_avg_conf=" << map_prior_avg_conf
+                           << " prior_core_hit_ratio=" << map_prior_core_hit_ratio << " prior_band_hit_ratio=" << map_prior_band_hit_ratio
+                           << " prior_inner_hit_ratio=" << map_prior_inner_hit_ratio
                            << " wall_ratio_inner=" << wall_ratio_inner << " wall_relief_inner=" << wall_relief_inner << " wall_r=" << wall_r
                            << " wall_r_axial_scale=" << wall_r_axial_scale
                            << " inc_unknown_ratio=" << inc_unknown_ratio << " inc_stable_ratio=" << inc_stable_ratio
@@ -1627,6 +1682,7 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
     map_degenerate,
     map_fitness_score,
     f2f_init_score,
+    map_conf_raw,
     map_conf,
     f2f_conf,
     w_f2f_trans,
@@ -1636,6 +1692,9 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
     map_prior_mult,
     map_prior_hit_ratio,
     map_prior_avg_conf,
+    map_prior_core_hit_ratio,
+    map_prior_band_hit_ratio,
+    map_prior_inner_hit_ratio,
     wall_ratio_inner,
     wall_relief_inner,
     wall_r,

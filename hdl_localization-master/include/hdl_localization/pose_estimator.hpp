@@ -98,6 +98,7 @@ public:
     bool axis_prealign_only_when_degenerate = true,
     bool axis_postalign_only_when_degenerate = true,
     bool enable_map_prior_layer = false,
+    bool enable_map_prior_nonaxial_adaptation = true,
     const std::string& map_prior_csv = "",
     double map_prior_voxel_size = 2.0,
     int map_prior_sample_step = 4,
@@ -165,9 +166,10 @@ private:
   Eigen::Matrix4f fuse_map_and_f2f_pose(
     const Eigen::Matrix4f& map_pose,
     const Eigen::Matrix4f& f2f_pose,
+    bool map_converged,
     double map_fitness_score,
     double f2f_fitness_score,
-    double map_conf_multiplier = 1.0,
+    double map_nonaxial_prior_multiplier = 1.0,
     double* out_map_conf = nullptr,
     double* out_f2f_conf = nullptr,
     double* out_w_f2f_trans = nullptr,
@@ -186,14 +188,17 @@ private:
     const pcl::PointCloud<PointT>::ConstPtr& cloud,
     const Eigen::Matrix4f& map_pose,
     double* out_hit_ratio = nullptr,
-    double* out_avg_prior_conf = nullptr) const;
+    double* out_avg_prior_conf = nullptr,
+    double* out_core_hit_ratio = nullptr,
+    double* out_band_hit_ratio = nullptr,
+    double* out_inner_hit_ratio = nullptr) const;
   void compute_wall_observability_metrics(
     const pcl::PointCloud<PointT>::ConstPtr& cloud,
     const Eigen::Matrix4f& map_pose,
     double* out_ratio_inner = nullptr,
     double* out_relief_inner = nullptr,
     double* out_r_wall = nullptr) const;
-  double compute_wall_r_axial_scale(double wall_r) const;
+  double compute_wall_r_axial_scale(double wall_r, bool map_converged, double map_fitness_score) const;
   void compute_inc_static_metrics(
     const pcl::PointCloud<PointT>::ConstPtr& cloud,
     const Eigen::Matrix4f& map_pose,
@@ -209,6 +214,7 @@ private:
     bool map_degenerate,
     double map_fitness_score,
     double f2f_fitness_score,
+    double map_conf_raw,
     double map_conf,
     double f2f_conf,
     double w_f2f_trans,
@@ -218,6 +224,9 @@ private:
     double map_prior_mult,
     double map_prior_hit_ratio,
     double map_prior_avg_conf,
+    double map_prior_core_hit_ratio,
+    double map_prior_band_hit_ratio,
+    double map_prior_inner_hit_ratio,
     double wall_ratio_inner,
     double wall_relief_inner,
     double wall_r,
@@ -333,6 +342,7 @@ private:
     }
   };
   bool enable_map_prior_layer;
+  bool enable_map_prior_nonaxial_adaptation;
   double map_prior_voxel_size;
   int map_prior_sample_step;
   int map_prior_min_hits;
