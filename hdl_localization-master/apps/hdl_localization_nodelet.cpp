@@ -462,6 +462,8 @@ private:
         private_nh.param<double>("map_prior_inner_gain", 0.25),
         private_nh.param<double>("map_prior_uncertain_gain", 0.15),
         private_nh.param<double>("map_prior_conf_floor", 0.2),
+        private_nh.param<std::string>("inc_static_reference_csv", std::string("")),
+        private_nh.param<double>("inc_static_reference_voxel_size", 2.0),
         private_nh.param<bool>("enable_reg_debug_csv", false),
         private_nh.param<std::string>("reg_debug_csv_path", std::string(""))));
     }
@@ -927,6 +929,8 @@ private:
       private_nh.param<double>("map_prior_inner_gain", 0.25),
       private_nh.param<double>("map_prior_uncertain_gain", 0.15),
       private_nh.param<double>("map_prior_conf_floor", 0.2),
+      private_nh.param<std::string>("inc_static_reference_csv", std::string("")),
+      private_nh.param<double>("inc_static_reference_voxel_size", 2.0),
       private_nh.param<bool>("enable_reg_debug_csv", false),
       private_nh.param<std::string>("reg_debug_csv_path", std::string(""))));
 
@@ -1008,6 +1012,8 @@ private:
       private_nh.param<double>("map_prior_inner_gain", 0.25),
       private_nh.param<double>("map_prior_uncertain_gain", 0.15),
       private_nh.param<double>("map_prior_conf_floor", 0.2),
+      private_nh.param<std::string>("inc_static_reference_csv", std::string("")),
+      private_nh.param<double>("inc_static_reference_voxel_size", 2.0),
       private_nh.param<bool>("enable_reg_debug_csv", false),
       private_nh.param<std::string>("reg_debug_csv_path", std::string(""))));
   }

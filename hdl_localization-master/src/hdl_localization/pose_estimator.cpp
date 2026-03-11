@@ -121,6 +121,8 @@ PoseEstimator::PoseEstimator(
   double map_prior_inner_gain,
   double map_prior_uncertain_gain,
   double map_prior_conf_floor,
+  const std::string& inc_static_reference_csv,
+  double inc_static_reference_voxel_size,
   bool enable_reg_debug_csv,
   const std::string& reg_debug_csv_path)
 : registration(registration),
@@ -182,6 +184,8 @@ PoseEstimator::PoseEstimator(
   map_prior_inner_gain(std::max(0.0, map_prior_inner_gain)),
   map_prior_uncertain_gain(std::max(0.0, map_prior_uncertain_gain)),
   map_prior_conf_floor(std::max(0.0, std::min(1.0, map_prior_conf_floor))),
+  inc_static_reference_csv(inc_static_reference_csv),
+  inc_static_reference_voxel_size(std::max(0.1, inc_static_reference_voxel_size)),
   enable_reg_debug_csv(enable_reg_debug_csv),
   reg_debug_csv_path(reg_debug_csv_path),
   reg_debug_seq(0),
@@ -320,29 +324,22 @@ PoseEstimator::PoseEstimator(
     }
   }
 
-  // Keep the original inc_static interface semantics:
-  // as long as the axial static adaptation is enabled, the prior voxel table is
-  // still loaded as the unknown-voxel reference, even if map prior fusion is off.
-  const bool need_map_prior_cells = this->enable_map_prior_layer || this->enable_inc_static_axial_adaptation;
-  if (need_map_prior_cells) {
+  if (this->enable_map_prior_layer) {
     if (!load_map_prior_csv(map_prior_csv)) {
-      if (this->enable_map_prior_layer) {
-        ROS_WARN_STREAM("map prior layer disabled: failed to load csv: " << map_prior_csv);
-        this->enable_map_prior_layer = false;
-      }
-      if (this->enable_inc_static_axial_adaptation) {
-        ROS_WARN_STREAM("inc_static axial adaptation will be ineffective: failed to load prior voxel csv: " << map_prior_csv);
-      }
+      ROS_WARN_STREAM("map prior layer disabled: failed to load csv: " << map_prior_csv);
+      this->enable_map_prior_layer = false;
     } else {
-      if (this->enable_map_prior_layer && this->enable_inc_static_axial_adaptation) {
-        ROS_INFO_STREAM("map prior voxel table loaded for map prior fusion and inc_static: cells=" << map_prior_cells.size()
-                        << " voxel_size=" << map_prior_voxel_size);
-      } else if (this->enable_map_prior_layer) {
-        ROS_INFO_STREAM("map prior layer loaded: cells=" << map_prior_cells.size() << " voxel_size=" << map_prior_voxel_size);
-      } else {
-        ROS_INFO_STREAM("map prior voxel table loaded for inc_static reference only: cells=" << map_prior_cells.size()
-                        << " voxel_size=" << map_prior_voxel_size);
-      }
+      ROS_INFO_STREAM("map prior layer loaded: cells=" << map_prior_cells.size() << " voxel_size=" << map_prior_voxel_size);
+    }
+  }
+
+  if (this->enable_inc_static_axial_adaptation) {
+    const std::string inc_static_csv_path = this->inc_static_reference_csv.empty() ? map_prior_csv : this->inc_static_reference_csv;
+    if (!load_prior_csv_into(inc_static_csv_path, &inc_static_reference_cells)) {
+      ROS_WARN_STREAM("inc_static axial adaptation will be ineffective: failed to load reference voxel csv: " << inc_static_csv_path);
+    } else {
+      ROS_INFO_STREAM("inc_static reference voxel table loaded: cells=" << inc_static_reference_cells.size()
+                      << " voxel_size=" << this->inc_static_reference_voxel_size);
     }
   }
 
@@ -775,7 +772,16 @@ bool PoseEstimator::compute_f2f_absolute_pose(
 }
 
 bool PoseEstimator::load_map_prior_csv(const std::string& path) {
-  map_prior_cells.clear();
+  return load_prior_csv_into(path, &map_prior_cells);
+}
+
+bool PoseEstimator::load_prior_csv_into(
+  const std::string& path,
+  std::unordered_map<PriorKey, PriorVoxelCell, PriorKeyHash>* out_cells) const {
+  if (!out_cells) {
+    return false;
+  }
+  out_cells->clear();
   if (path.empty()) {
     return false;
   }
@@ -861,7 +867,7 @@ bool PoseEstimator::load_map_prior_csv(const std::string& path) {
       const double conf = std::stod(cols[idx_conf]);
       cell.conf_prior = static_cast<float>(std::max(0.0, std::min(1.0, conf)));
 
-      map_prior_cells[key] = cell;
+      (*out_cells)[key] = cell;
       ++loaded;
     } catch (...) {
       continue;
@@ -1082,12 +1088,12 @@ void PoseEstimator::compute_inc_static_metrics(
   if (out_stable_ratio) *out_stable_ratio = 0.0;
   if (out_r_inc_static) *out_r_inc_static = 0.0;
 
-  if (!cloud || cloud->empty() || map_prior_cells.empty()) {
+  if (!cloud || cloud->empty() || inc_static_reference_cells.empty()) {
     return;
   }
 
   const int step = std::max(1, inc_static_sample_step);
-  const double inv = 1.0 / std::max(map_prior_voxel_size, 0.1);
+  const double inv = 1.0 / std::max(inc_static_reference_voxel_size, 0.1);
   int tested = 0;
   int unknown_points = 0;
   std::unordered_set<PriorKey, PriorKeyHash> unknown_keys;
@@ -1107,8 +1113,8 @@ void PoseEstimator::compute_inc_static_metrics(
     key.y = static_cast<int>(std::floor(p_map.y() * inv));
     key.z = static_cast<int>(std::floor(p_map.z() * inv));
 
-    auto it = map_prior_cells.find(key);
-    const bool is_unknown = (it == map_prior_cells.end()) || (it->second.class_id == 0);
+    auto it = inc_static_reference_cells.find(key);
+    const bool is_unknown = (it == inc_static_reference_cells.end()) || (it->second.class_id == 0);
     if (!is_unknown) {
       continue;
     }

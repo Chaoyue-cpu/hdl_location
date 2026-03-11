@@ -32,8 +32,8 @@
   <!-- 是否按 map_score / f2f_score 生成 map_conf 与 f2f_conf；
        false 时两侧基础置信度都按 1.0 处理 -->
   <arg name="enable_score_weighted_fusion" default="true" />
-  <!-- f2f 置信度增益。为 0 时，f2f 仍可计算，但只提供初值/参考，不参与最终融合 -->
-  <arg name="f2f_score_confidence_gain" default="0.5" />
+  <!-- 为0时，只提供初值，不提供后面的融合 -->
+  <arg name="f2f_score_confidence_gain" default="0.25" />
   <!-- 是否启用方向相关融合。
        true: 平移分为 axial / nonaxial 分别加权；
        false: 只使用统一的 w_f2f_t 做各向同性平移融合 -->
@@ -64,18 +64,21 @@
   <arg name="inc_static_sample_step" default="4" />
   <!-- 当前帧未知体素数量门槛：未达到该数量时，不计算 stable_ratio（直接按0处理） -->
   <arg name="inc_static_min_unknown_voxels" default="20" />
-  <!-- 轴向自适应强度：以 1.0 为基准，死区外按 beta 朝目标缩放，并限制在 [min,max] -->
-  <arg name="inc_static_beta" default="0.05" />
+  <!-- 轴向自适应强度：以 1.0 为基准，死区外按 beta 朝目标缩放，并限制在 [min,max]，斜率0.05时稍差 -->
+  <arg name="inc_static_beta" default="0.1" />
   <!-- r_inc_static 死区阈值：低于该值时强制 scale=1.0，仅高于阈值才开始增益 -->
   <arg name="inc_static_r_deadzone" default="0.25" />
   <!-- 轴向自适应缩放下界 -->
   <arg name="inc_static_scale_min" default="1.0" />
   <!-- 轴向自适应缩放上界 -->
   <arg name="inc_static_scale_max" default="1.5" />
+  <!-- 轴向静态特征实验使用独立参考体素，不受后续 nonaxial prior 参数调整影响 -->
+  <arg name="inc_static_reference_csv_arg" default="/home/scy/catkin_ws_hdl_location/墙平面0416/prior_layer_map_tuned_clean10/prior_voxel_layer_from_map.csv" />
+  <arg name="inc_static_reference_voxel_size_arg" default="2.0" />
   
 
   <arg name="enable_reg_debug_csv" default="true" />
-  <arg name="reg_debug_csv_path" default="/home/scy/catkin_ws_hdl_location/reg_debug_0416_gt-prior_conservative.csv" />
+  <arg name="reg_debug_csv_path" default="/home/scy/catkin_ws_hdl_location/reg_debug_0416_gt-轴向自适应.csv" />
   <arg name="enable_robot_odometry_prediction" value="false" />
   <arg name="robot_odom_frame_id" value="odom" />
   <arg name="plot_estimation_errors" value="false" />
@@ -83,15 +86,16 @@
        enable_map_prior_layer 控制是否将体素先验用于地图侧融合；
        enable_map_prior_nonaxial_adaptation 控制其是否进入 nonaxial 融合；
        当前代码中体素先验不再改全局 map_conf，只作用于 map_nonaxial；
-       但只要 enable_inc_static_axial_adaptation=true，代码仍会加载体素表作为 inc_static 的未知体素参考；
+       inc_static 使用独立的 reference csv/voxel_size，不再与 nonaxial prior 共用同一套参考配置；
        preset 仅改变 prior 参数，不会自动改变 axial 自适应相关开关 -->
   <!-- map prior experiment presets: off / conservative / mild_boost / custom -->
   <!-- 注意：当前代码中的体素先验已改为“只惩罚、不增信”，mild_boost 仅表示较弱惩罚 -->
-  <arg name="map_prior_experiment_preset" default="off" />
-  <arg name="map_prior_enable" default="false" />
+  <!-- 纯轴向自适应验证：关闭体素先验对地图 nonaxial 的融合影响，仅保留 inc_static 的独立 reference csv -->
+  <arg name="map_prior_experiment_preset" default="conservative" />
+  <arg name="map_prior_enable" default="true" />
   <!-- 独立开关：体素先验仅用于调节 map_nonaxial；
        关闭后仍可保留 enable_map_prior_layer=true 用于日志统计或其他依赖体素表的模块 -->
-  <arg name="enable_map_prior_nonaxial_adaptation" default="false" />
+  <arg name="enable_map_prior_nonaxial_adaptation" default="true" />
   <arg name="map_prior_voxel_size_arg" default="2.0" />
   <arg name="map_prior_sample_step_arg" default="4" />
   <arg name="map_prior_min_hits_arg" default="150" />
@@ -203,6 +207,8 @@
       <param name="inc_static_r_deadzone" value="$(arg inc_static_r_deadzone)" />
       <param name="inc_static_scale_min" value="$(arg inc_static_scale_min)" />
       <param name="inc_static_scale_max" value="$(arg inc_static_scale_max)" />
+      <param name="inc_static_reference_csv" value="$(arg inc_static_reference_csv_arg)" />
+      <param name="inc_static_reference_voxel_size" value="$(arg inc_static_reference_voxel_size_arg)" />
       <!-- lightweight f2f confidence filtering (default off) -->
       <param name="enable_f2f_confidence_filter" value="true" />
       <param name="enable_f2f_dynamic_filter" value="true" />

@@ -108,6 +108,8 @@ public:
     double map_prior_inner_gain = 0.25,
     double map_prior_uncertain_gain = 0.15,
     double map_prior_conf_floor = 0.2,
+    const std::string& inc_static_reference_csv = "",
+    double inc_static_reference_voxel_size = 2.0,
     bool enable_reg_debug_csv = false,
     const std::string& reg_debug_csv_path = "");
   ~PoseEstimator();
@@ -341,6 +343,9 @@ private:
       return hx ^ (hy << 1) ^ (hz << 2);
     }
   };
+  bool load_prior_csv_into(
+    const std::string& path,
+    std::unordered_map<PriorKey, PriorVoxelCell, PriorKeyHash>* out_cells) const;
   bool enable_map_prior_layer;
   bool enable_map_prior_nonaxial_adaptation;
   double map_prior_voxel_size;
@@ -352,6 +357,9 @@ private:
   double map_prior_uncertain_gain;
   double map_prior_conf_floor;
   std::unordered_map<PriorKey, PriorVoxelCell, PriorKeyHash> map_prior_cells;
+  std::string inc_static_reference_csv;
+  double inc_static_reference_voxel_size;
+  std::unordered_map<PriorKey, PriorVoxelCell, PriorKeyHash> inc_static_reference_cells;
   bool enable_reg_debug_csv;
   std::string reg_debug_csv_path;
   std::ofstream reg_debug_csv_stream;
