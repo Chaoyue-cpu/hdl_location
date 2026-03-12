@@ -55,7 +55,7 @@
   <!-- 增量静态结构轴向自适应：
        根据 r_inc_static 调整 f2f 侧 axial 信息权重；
        只影响 axial，不影响 nonaxial -->
-  <arg name="enable_inc_static_axial_adaptation" default="true" />
+  <arg name="enable_inc_static_axial_adaptation" default="false" />
   <!-- 时序窗口长度（帧数）。越大越平滑、触发更严格，但响应更慢 -->
   <arg name="inc_static_window_size" default="15" />
   <!-- 单个未知体素在窗口内至少出现多少次才记为“稳定未知体素” -->
@@ -78,7 +78,7 @@
   
 
   <arg name="enable_reg_debug_csv" default="true" />
-  <arg name="reg_debug_csv_path" default="/home/scy/catkin_ws_hdl_location/reg_debug_0416_gt-最终测试.csv" />
+  <arg name="reg_debug_csv_path" default="/home/scy/catkin_ws_hdl_location/reg_debug_0416_gt-map非轴向自适应原始.csv" />
   <arg name="enable_robot_odometry_prediction" value="false" />
   <arg name="robot_odom_frame_id" value="odom" />
   <arg name="plot_estimation_errors" value="false" />
