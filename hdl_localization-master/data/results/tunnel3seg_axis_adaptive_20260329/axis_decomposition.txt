@@ -1,0 +1,37 @@
+Pure frame-to-frame direction analysis on current localization bag
+
+Data:
+- GT: /home/scy/velodyne_simulator/experiments/tunnel3seg_localization_varspeed_20260328_210412/output/gt_lidar_at_velodyne.tum
+- F2F est: /home/scy/velodyne_simulator/experiments/tunnel3seg_f2f_analysis_20260329_134604/output/odom_f2f.tum
+- Axis: /home/scy/catkin_ws_hdl_location/中轴/axis_tunnel3seg_localization_to_junction_20260329_centerline.csv
+
+Overall pure f2f:
+- APE rmse: 10.534387 m
+- RPE rmse: 0.016085 m
+
+Absolute error decomposition:
+- axial_abs rmse: 10.491989 m
+- axial signed mean: -7.273553 m
+- nonaxial 3D rmse: 0.944182 m
+- lateral XY rmse: 0.208746 m
+- z rmse: 0.920817 m
+
+Incremental translational error decomposition:
+- axial_abs rmse: 0.016108 m
+- nonaxial 3D rmse: 0.002019 m
+- lateral XY rmse: 0.000637 m
+
+Segment-wise pure f2f absolute error:
+- seg1_straight axial rmse: 0.148578 m, nonaxial rmse: 0.747332 m
+- bend axial rmse: 0.062732 m, nonaxial rmse: 0.728166 m
+- seg3_straight axial rmse: 12.405949 m, nonaxial rmse: 1.015098 m
+
+Map-based comparison (same bag):
+- E2 gain=0.1 axial rmse: 3.024982 m, lateral XY rmse: 0.014687 m, z rmse: 0.012043 m
+- E3 r0=0.70 gain=0.1 axial rmse: 3.180967 m, lateral XY rmse: 0.014689 m, z rmse: 0.012053 m
+- E3 beta=0.5 gain=0.1 axial rmse: 3.215521 m, lateral XY rmse: 0.014674 m, z rmse: 0.012047 m
+
+Interpretation:
+- On this tunnel bag, the practical dominant drift direction of pure f2f is axial/longitudinal, not lateral.
+- The large absolute drift is concentrated in the long post-bend straight segment.
+- Therefore, increasing axial f2f fusion in E3 tends to import the dominant f2f bias into the fused pose, which explains why E3 is weaker than E2 here.

@@ -1,0 +1,65 @@
+raw_bag=/home/scy/velodyne_simulator/experiments/tunnel3seg_localization_varspeed_20260328_210412/bag/tunnel_3seg_localization_varspeed_no_cam.bag
+gt_lidar=/home/scy/velodyne_simulator/experiments/tunnel3seg_localization_varspeed_20260328_210412/output/gt_lidar_at_velodyne.tum
+est_bag=/home/scy/velodyne_simulator/experiments/tunnel3seg_mapbased_E3_lowf2f_recheck_20260329_143031/localization/bag/odom_est.bag
+est_tum=/home/scy/velodyne_simulator/experiments/tunnel3seg_mapbased_E3_lowf2f_recheck_20260329_143031/localization/output/odom.tum
+
+[ape]
+--------------------------------------------------------------------------------
+Loaded 1826 stamps and poses from: /home/scy/velodyne_simulator/experiments/tunnel3seg_localization_varspeed_20260328_210412/output/gt_lidar_at_velodyne.tum
+Loaded 1826 stamps and poses from: /home/scy/velodyne_simulator/experiments/tunnel3seg_mapbased_E3_lowf2f_recheck_20260329_143031/localization/output/odom.tum
+--------------------------------------------------------------------------------
+Synchronizing trajectories...
+Found 1826 of max. 1826 possible matching timestamps between...
+	/home/scy/velodyne_simulator/experiments/tunnel3seg_localization_varspeed_20260328_210412/output/gt_lidar_at_velodyne.tum
+and:	/home/scy/velodyne_simulator/experiments/tunnel3seg_mapbased_E3_lowf2f_recheck_20260329_143031/localization/output/odom.tum
+..with max. time diff.: 0.02 (s) and time offset: 0.0 (s).
+--------------------------------------------------------------------------------
+Compared 1826 absolute pose pairs.
+Calculating APE for translation part pose relation...
+--------------------------------------------------------------------------------
+APE w.r.t. translation part (m)
+(not aligned)
+
+       max	7.090354
+      mean	1.702159
+    median	0.112028
+       min	0.002525
+      rmse	3.174847
+       sse	18405.450820
+       std	2.679983
+
+
+[ape_aligned]
+--------------------------------------------------------------------------------
+Loaded 1826 stamps and poses from: /home/scy/velodyne_simulator/experiments/tunnel3seg_localization_varspeed_20260328_210412/output/gt_lidar_at_velodyne.tum
+Loaded 1826 stamps and poses from: /home/scy/velodyne_simulator/experiments/tunnel3seg_mapbased_E3_lowf2f_recheck_20260329_143031/localization/output/odom.tum
+--------------------------------------------------------------------------------
+Synchronizing trajectories...
+Found 1826 of max. 1826 possible matching timestamps between...
+	/home/scy/velodyne_simulator/experiments/tunnel3seg_localization_varspeed_20260328_210412/output/gt_lidar_at_velodyne.tum
+and:	/home/scy/velodyne_simulator/experiments/tunnel3seg_mapbased_E3_lowf2f_recheck_20260329_143031/localization/output/odom.tum
+..with max. time diff.: 0.02 (s) and time offset: 0.0 (s).
+--------------------------------------------------------------------------------
+Aligning using Umeyama's method...
+Rotation of alignment:
+[[ 9.99991591e-01  4.10102616e-03 -2.11174974e-05]
+ [-4.10103950e-03  9.99991362e-01 -6.76267512e-04]
+ [ 1.83439242e-05  6.76348429e-04  9.99999771e-01]]
+Translation of alignment:
+[ 1.63411034  0.21073394 -0.00382747]
+Scale correction: 1.0
+--------------------------------------------------------------------------------
+Compared 1826 absolute pose pairs.
+Calculating APE for translation part pose relation...
+--------------------------------------------------------------------------------
+APE w.r.t. translation part (m)
+(with SE(3) Umeyama alignment)
+
+       max	5.388515
+      mean	2.267789
+    median	1.675623
+       min	0.105269
+      rmse	2.682618
+       sse	13140.700993
+       std	1.433030
+
