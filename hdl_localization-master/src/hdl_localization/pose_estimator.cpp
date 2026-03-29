@@ -1180,22 +1180,27 @@ double PoseEstimator::compute_inc_static_axial_scale(double r_inc_static) const 
   const double hi = std::max(inc_static_scale_min, inc_static_scale_max);
   const double neutral = std::max(lo, std::min(hi, 1.0));
   const double r = std::max(0.0, std::min(1.0, r_inc_static));
-  if (r <= inc_static_r_deadzone) {
-    return neutral;
-  }
-  const double active = std::max(0.0, std::min(1.0, (r - inc_static_r_deadzone) / std::max(1e-6, 1.0 - inc_static_r_deadzone)));
+  const double r0 = std::max(1e-6, std::min(0.999999, inc_static_r_deadzone));
+  const double range_usage = std::max(0.0, std::min(1.0, inc_static_beta));
 
-  // Up-weight mode: allowed range entirely above 1.0 (or spans 1.0 with upward preference).
-  // Down-weight mode: allowed range entirely below 1.0.
-  // beta controls the maximum deviation from 1.0, while [lo, hi] bounds the final scale.
-  double target = neutral;
-  if (hi <= 1.0 + 1e-9) {
-    target = std::max(lo, 1.0 - inc_static_beta);
-  } else {
-    target = std::min(hi, 1.0 + inc_static_beta);
+  // Paper-friendly bilateral formulation:
+  //   - r0 acts as the neutral evidence point
+  //   - lo / hi define the bounded lower / upper scale targets
+  //   - beta (range_usage) controls how much of that bounded range is used
+  // This keeps the implementation close to a simple piecewise-linear equation
+  // that can be written directly in the method section.
+  const double low_target = neutral + range_usage * (lo - neutral);
+  const double high_target = neutral + range_usage * (hi - neutral);
+
+  double raw_scale = neutral;
+  if (r < r0) {
+    const double t = std::max(0.0, std::min(1.0, (r0 - r) / r0));
+    raw_scale = neutral + (low_target - neutral) * t;
+  } else if (r > r0) {
+    const double t = std::max(0.0, std::min(1.0, (r - r0) / std::max(1e-6, 1.0 - r0)));
+    raw_scale = neutral + (high_target - neutral) * t;
   }
 
-  const double raw_scale = neutral + (target - neutral) * active;
   return std::max(lo, std::min(hi, raw_scale));
 }
 
