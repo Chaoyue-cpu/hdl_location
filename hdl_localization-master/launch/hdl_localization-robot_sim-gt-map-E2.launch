@@ -11,7 +11,7 @@
 
 
   <!-- ndt不用imu，gicp建议用，optional arguments，不用imu时除了use_global_localization全false， -->
-  <arg name="use_imu" default="false" />
+  <arg name="use_imu" default="true" />
   <arg name="invert_imu_acc" default="false" />
   <arg name="invert_imu_gyro" default="false" />
   <arg name="use_global_localization" default="false" />
@@ -32,15 +32,22 @@
   <!-- 是否按 map_score / f2f_score 生成 map_conf 与 f2f_conf；
        false 时两侧基础置信度都按 1.0 处理 -->
   <arg name="enable_score_weighted_fusion" default="true" />
+  <!-- E2 only studies isotropic f2f assistance on top of E1.
+       Keep the paper-mode branch off and only activate a small isotropic
+       f2f contribution through this gain. -->
   <!-- 为0时，只提供初值，不提供后面的融合 -->
-  <arg name="f2f_score_confidence_gain" default="0.50" />
+  <arg name="f2f_score_confidence_gain" default="0.1" />
+  <!-- 论文版简化融合：只保留 alpha + f2f score + r_inc；非轴向再接入 penalty-only prior -->
+  <arg name="enable_alpha_score_r_inc_fusion" default="false" />
+  <arg name="f2f_base_alpha" default="0.1" />
+  <arg name="f2f_score_confidence_kappa" default="5.0" />
+  <arg name="r_inc_axial_gain" default="1.0" />
   <!-- 是否启用方向相关融合。
        true: 平移分为 axial / nonaxial 分别加权；
        false: 只使用统一的 w_f2f_t 做各向同性平移融合 -->
   <arg name="enable_axis_anisotropic_fusion" default="false" />
-  <!-- axial / nonaxial 四个基础增益：
-       仅在 enable_axis_anisotropic_fusion=true 时生效；
-       值越大，对应侧（map 或 f2f）在该方向上的信息权重越高 -->
+  <!-- Legacy anisotropic gains are inactive in E2 because
+       enable_axis_anisotropic_fusion=false. Keep neutral defaults. -->
   <arg name="f2f_axial_conf_gain" default="1.0" />
   <arg name="f2f_nonaxial_conf_gain" default="0.25" />
   <arg name="map_axial_conf_gain" default="0.3" />
@@ -78,7 +85,7 @@
   
 
   <arg name="enable_reg_debug_csv" default="true" />
-  <arg name="reg_debug_csv_path" default="/home/scy/catkin_ws_hdl_location/ablation_20260328_variant2_manual_os164/E2/E2_reg_debug.csv" />
+  <arg name="reg_debug_csv_path" default="/home/scy/catkin_ws_hdl_location/reg_debug_0416_gt-f2f轴向自适应.csv" />
   <arg name="enable_robot_odometry_prediction" value="false" />
   <arg name="robot_odom_frame_id" value="odom" />
   <arg name="plot_estimation_errors" value="false" />
@@ -137,9 +144,9 @@
 <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/dlo_map_all_1.pcd" /> -->
 <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/DLO_half_keyframe11_0.05resolution.pcd" /> -->
 
-<param name="globalmap_pcd" value="/media/scy/新加卷/数据集/autoware_map_output/robot_sim_variant_20260328/pcd_slices/pointcloud_map.pcd" />
-<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/robot_sim_variant_20260328/pcd_slices/pointcloud_map_metadata.yaml" />
-<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/robot_sim_variant_20260328/pcd_slices/pointcloud_map.pcd" />    
+<param name="globalmap_pcd" value="/media/scy/新加卷/数据集/autoware_map_output/robot-sim-location/pointcloud_map.pcd" />
+<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/robot-sim-location/pointcloud_map_metadata.yaml" />
+<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/robot-sim-location/pointcloud_map.pcd" />    
       <param name="convert_utm_to_local" value="true" />
       <!-- ndt0.15 -->
       <param name="downsample_resolution" value="0.2" />
@@ -150,8 +157,8 @@
     <!-- hdl_localization_nodelet -->
     <node pkg="nodelet" type="nodelet" name="hdl_localization_nodelet" args="load hdl_localization/HdlLocalizationNodelet $(arg nodelet_manager)">
      <!-- 地图参数 -->
-      <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/robot_sim_variant_20260328/pcd_slices/pointcloud_map_metadata.yaml" />
-      <param name="tile_radius" value="1" />   <!-- 1=3x3, 2=5x5 -->
+      <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/robot-sim-location/pointcloud_map_metadata.yaml" />
+      <param name="tile_radius" value="2" />   <!-- 1=3x3, 2=5x5 -->
 <param name="time_offset_lidar_to_imu" value="0.0" />
 
       <remap from="/velodyne_points" to="$(arg points_topic)" />
@@ -189,6 +196,10 @@
 
       <param name="ndt_score_min_confidence" value="0.05" />
       <param name="f2f_score_confidence_gain" value="$(arg f2f_score_confidence_gain)" />
+      <param name="enable_alpha_score_r_inc_fusion" value="$(arg enable_alpha_score_r_inc_fusion)" />
+      <param name="f2f_base_alpha" value="$(arg f2f_base_alpha)" />
+      <param name="f2f_score_confidence_kappa" value="$(arg f2f_score_confidence_kappa)" />
+      <param name="r_inc_axial_gain" value="$(arg r_inc_axial_gain)" />
       <param name="enable_axis_anisotropic_fusion" value="$(arg enable_axis_anisotropic_fusion)" />
       <param name="f2f_axial_conf_gain" value="$(arg f2f_axial_conf_gain)" />
       <param name="f2f_nonaxial_conf_gain" value="$(arg f2f_nonaxial_conf_gain)" />
@@ -221,8 +232,8 @@
       <param name="f2f_min_filtered_points" value="1000" />
       <!-- axis prior (1D along centerline, without cross-section area descriptor) -->
       <param name="enable_axis_prior" value="false" />
-      <param name="axis_centerline_csv" value="/home/scy/catkin_ws_hdl_location/中轴/axis_0416_new5_noalign_centerline.csv" />
-      <param name="axis_profile_csv" value="/home/scy/catkin_ws_hdl_location/中轴/axis_0416_new5_noalign_profile.csv" />
+      <param name="axis_centerline_csv" value="/home/scy/catkin_ws_hdl_location/中轴/axis_tunnel3seg_localization_varspeed_safe_to_last_junction_20260408_180842_centerline.csv" />
+      <param name="axis_profile_csv" value="/home/scy/catkin_ws_hdl_location/中轴/axis_tunnel3seg_localization_varspeed_safe_to_last_junction_20260408_180842_profile.csv" />
       <param name="axis_search_window" value="6.0" />
       <param name="axis_lateral_weight" value="1.0" />
       <param name="axis_vertical_weight" value="0.2" />
@@ -265,20 +276,43 @@
       <!-- otherwise, you need to input an initial pose with "2D Pose Estimate" on rviz" -->
       <!--gt地图初始位姿  -->
     <param name="specify_init_pose" value="true" />
-
+    <!-- 605s -->
+      <!-- <param name="init_pos_x" value="1530.937134" />
+      <param name="init_pos_y" value="-268.442673" />
+      <param name="init_pos_z" value="0.5" />
+      <param name="init_ori_w" value="0.0065251" />
+      <param name="init_ori_x" value="-0.00826834" />
+      <param name="init_ori_y" value="0.0233589" />
+      <param name="init_ori_z" value="-0.990639" /> -->
+<!-- 693s -->
       
 <!-- 公司地图参数 -->
-      <param name="init_pos_x" value="-0.001382903" />
-      <param name="init_pos_y" value="0.000937522" />
-      <param name="init_pos_z" value="0.294839931" />
-      <param name="init_ori_w" value="0.999998803" />
-      <param name="init_ori_x" value="-0.000074377" />
-      <param name="init_ori_y" value="0.000003576" />
-      <param name="init_ori_z" value="0.001545503" />
+      <param name="init_pos_x" value="0" />
+      <param name="init_pos_y" value="0" />
+      <param name="init_pos_z" value="0.294844901" />
+      <param name="init_ori_w" value="0.999999768" />
+      <param name="init_ori_x" value="-0.000074374" />
+      <param name="init_ori_y" value="0.000003640" />
+      <param name="init_ori_z" value="0.000677477" />
+
+      <!-- 837s -->
+      <!-- <param name="init_pos_x" value="1100.937134" />
+      <param name="init_pos_y" value="-132.442673" />
+      <param name="init_pos_z" value="-35.079445" />
+      <param name="init_ori_w" value="0.015251" />
+      <param name="init_ori_x" value="-0.026834" />
+      <param name="init_ori_y" value="0.155982" />
+      <param name="init_ori_z" value="-0.987278" /> -->
 
 
-
-
+      <!-- 912s -->
+      <!-- <param name="init_pos_x" value="1100.937134" />
+      <param name="init_pos_y" value="-132.442673" />
+      <param name="init_pos_z" value="-35.079445" />
+      <param name="init_ori_w" value="0.015251" />
+      <param name="init_ori_x" value="-0.026834" />
+      <param name="init_ori_y" value="0.155982" />
+      <param name="init_ori_z" value="-0.987278" /> -->
 
       <param name="use_global_localization" value="$(arg use_global_localization)" />
     </node>

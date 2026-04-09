@@ -33,15 +33,20 @@
        false 时两侧基础置信度都按 1.0 处理 -->
   <arg name="enable_score_weighted_fusion" default="true" />
   <!-- 为0时，只提供初值，不提供后面的融合 -->
-  <arg name="f2f_score_confidence_gain" default="0.40" />
+  <arg name="f2f_score_confidence_gain" default="0.0" />
+  <!-- 论文版简化融合：只保留 alpha + f2f score + r_inc；非轴向再接入 penalty-only prior -->
+  <arg name="enable_alpha_score_r_inc_fusion" default="false" />
+  <arg name="f2f_base_alpha" default="0.1" />
+  <arg name="f2f_score_confidence_kappa" default="5.0" />
+  <arg name="r_inc_axial_gain" default="1.0" />
   <!-- 是否启用方向相关融合。
        true: 平移分为 axial / nonaxial 分别加权；
        false: 只使用统一的 w_f2f_t 做各向同性平移融合 -->
-  <arg name="enable_axis_anisotropic_fusion" default="true" />
+  <arg name="enable_axis_anisotropic_fusion" default="false" />
   <!-- axial / nonaxial 四个基础增益：
        仅在 enable_axis_anisotropic_fusion=true 时生效；
        值越大，对应侧（map 或 f2f）在该方向上的信息权重越高 -->
-  <arg name="f2f_axial_conf_gain" default="2.0" />
+  <arg name="f2f_axial_conf_gain" default="1.0" />
   <arg name="f2f_nonaxial_conf_gain" default="0.25" />
   <arg name="map_axial_conf_gain" default="0.3" />
   <arg name="map_nonaxial_conf_gain" default="1.0" />
@@ -137,9 +142,9 @@
 <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/dlo_map_all_1.pcd" /> -->
 <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/DLO_half_keyframe11_0.05resolution.pcd" /> -->
 
-<param name="globalmap_pcd" value="/media/scy/新加卷/数据集/autoware_map_output/robot_sim_variant_20260328/pcd_slices/pointcloud_map.pcd" />
-<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/robot_sim_variant_20260328/pcd_slices/pointcloud_map_metadata.yaml" />
-<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/robot_sim_variant_20260328/pcd_slices/pointcloud_map.pcd" />    
+<param name="globalmap_pcd" value="/media/scy/新加卷/数据集/autoware_map_output/robot-sim-location/pointcloud_map.pcd" />
+<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/robot-sim-location/pointcloud_map_metadata.yaml" />
+<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/robot-sim-location/pointcloud_map.pcd" />    
       <param name="convert_utm_to_local" value="true" />
       <!-- ndt0.15 -->
       <param name="downsample_resolution" value="0.2" />
@@ -150,8 +155,8 @@
     <!-- hdl_localization_nodelet -->
     <node pkg="nodelet" type="nodelet" name="hdl_localization_nodelet" args="load hdl_localization/HdlLocalizationNodelet $(arg nodelet_manager)">
      <!-- 地图参数 -->
-      <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/robot_sim_variant_20260328/pcd_slices/pointcloud_map_metadata.yaml" />
-      <param name="tile_radius" value="1" />   <!-- 1=3x3, 2=5x5 -->
+      <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/robot-sim-location/pointcloud_map_metadata.yaml" />
+      <param name="tile_radius" value="2" />   <!-- 1=3x3, 2=5x5 -->
 <param name="time_offset_lidar_to_imu" value="0.0" />
 
       <remap from="/velodyne_points" to="$(arg points_topic)" />
@@ -189,6 +194,10 @@
 
       <param name="ndt_score_min_confidence" value="0.05" />
       <param name="f2f_score_confidence_gain" value="$(arg f2f_score_confidence_gain)" />
+      <param name="enable_alpha_score_r_inc_fusion" value="$(arg enable_alpha_score_r_inc_fusion)" />
+      <param name="f2f_base_alpha" value="$(arg f2f_base_alpha)" />
+      <param name="f2f_score_confidence_kappa" value="$(arg f2f_score_confidence_kappa)" />
+      <param name="r_inc_axial_gain" value="$(arg r_inc_axial_gain)" />
       <param name="enable_axis_anisotropic_fusion" value="$(arg enable_axis_anisotropic_fusion)" />
       <param name="f2f_axial_conf_gain" value="$(arg f2f_axial_conf_gain)" />
       <param name="f2f_nonaxial_conf_gain" value="$(arg f2f_nonaxial_conf_gain)" />

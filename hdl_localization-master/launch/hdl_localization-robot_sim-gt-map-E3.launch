@@ -11,7 +11,7 @@
 
 
   <!-- ndt不用imu，gicp建议用，optional arguments，不用imu时除了use_global_localization全false， -->
-  <arg name="use_imu" default="false" />
+  <arg name="use_imu" default="true" />
   <arg name="invert_imu_acc" default="false" />
   <arg name="invert_imu_gyro" default="false" />
   <arg name="use_global_localization" default="false" />
@@ -32,19 +32,25 @@
   <!-- 是否按 map_score / f2f_score 生成 map_conf 与 f2f_conf；
        false 时两侧基础置信度都按 1.0 处理 -->
   <arg name="enable_score_weighted_fusion" default="true" />
+  <!-- E3 uses the paper-mode branch below, so the legacy isotropic gain is
+       intentionally neutralized here. -->
   <!-- 为0时，只提供初值，不提供后面的融合 -->
-  <arg name="f2f_score_confidence_gain" default="1.00" />
+  <arg name="f2f_score_confidence_gain" default="0.0" />
+  <!-- 论文版简化融合：只保留 alpha + f2f score + r_inc；非轴向再接入 penalty-only prior -->
+  <arg name="enable_alpha_score_r_inc_fusion" default="true" />
+  <arg name="f2f_base_alpha" default="0.1" />
+  <arg name="f2f_score_confidence_kappa" default="5.0" />
+  <arg name="r_inc_axial_gain" default="1.0" />
   <!-- 是否启用方向相关融合。
        true: 平移分为 axial / nonaxial 分别加权；
        false: 只使用统一的 w_f2f_t 做各向同性平移融合 -->
   <arg name="enable_axis_anisotropic_fusion" default="true" />
-  <!-- axial / nonaxial 四个基础增益：
-       仅在 enable_axis_anisotropic_fusion=true 时生效；
-       值越大，对应侧（map 或 f2f）在该方向上的信息权重越高 -->
-  <arg name="f2f_axial_conf_gain" default="2.0" />
-  <arg name="f2f_nonaxial_conf_gain" default="0.50" />
-  <arg name="map_axial_conf_gain" default="0.15" />
-  <arg name="map_nonaxial_conf_gain" default="0.6" />
+  <!-- Legacy anisotropic gains are bypassed by the paper-mode branch above.
+       Keep neutral defaults here to avoid confusing them with active knobs. -->
+  <arg name="f2f_axial_conf_gain" default="1.0" />
+  <arg name="f2f_nonaxial_conf_gain" default="0.25" />
+  <arg name="map_axial_conf_gain" default="0.3" />
+  <arg name="map_nonaxial_conf_gain" default="1.0" />
   <!-- 墙结构可观测性自适应：
        仅在地图配准可靠时，根据 wall_r 增强 map 侧 axial 信息权重；
        只影响 axial，不影响 nonaxial -->
@@ -55,7 +61,7 @@
   <!-- 增量静态结构轴向自适应：
        根据 r_inc_static 调整 f2f 侧 axial 信息权重；
        只影响 axial，不影响 nonaxial -->
-  <arg name="enable_inc_static_axial_adaptation" default="true" />
+  <arg name="enable_inc_static_axial_adaptation" default="false" />
   <!-- 时序窗口长度（帧数）。越大越平滑、触发更严格，但响应更慢 -->
   <arg name="inc_static_window_size" default="15" />
   <!-- 单个未知体素在窗口内至少出现多少次才记为“稳定未知体素” -->
@@ -65,13 +71,13 @@
   <!-- 当前帧未知体素数量门槛：未达到该数量时，不计算 stable_ratio（直接按0处理） -->
   <arg name="inc_static_min_unknown_voxels" default="20" />
   <!-- 轴向自适应强度：以 1.0 为基准，死区外按 beta 朝目标缩放，并限制在 [min,max]，斜率0.05时稍差 -->
-  <arg name="inc_static_beta" default="0.3" />
+  <arg name="inc_static_beta" default="0.1" />
   <!-- r_inc_static 死区阈值：低于该值时强制 scale=1.0，仅高于阈值才开始增益 -->
-  <arg name="inc_static_r_deadzone" default="0.15" />
+  <arg name="inc_static_r_deadzone" default="0.25" />
   <!-- 轴向自适应缩放下界 -->
   <arg name="inc_static_scale_min" default="1.0" />
   <!-- 轴向自适应缩放上界 -->
-  <arg name="inc_static_scale_max" default="3.0" />
+  <arg name="inc_static_scale_max" default="1.5" />
   <!-- 轴向静态特征实验使用独立参考体素，不受后续 nonaxial prior 参数调整影响 -->
   <arg name="inc_static_reference_csv_arg" default="/home/scy/catkin_ws_hdl_location/墙平面0416/prior_layer_map_tuned_clean10/prior_voxel_layer_from_map.csv" />
   <arg name="inc_static_reference_voxel_size_arg" default="2.0" />
@@ -137,9 +143,9 @@
 <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/dlo_map_all_1.pcd" /> -->
 <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/DLO_half_keyframe11_0.05resolution.pcd" /> -->
 
-<param name="globalmap_pcd" value="/media/scy/新加卷/数据集/autoware_map_output/robot_sim_variant_20260328/pcd_slices/pointcloud_map.pcd" />
-<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/robot_sim_variant_20260328/pcd_slices/pointcloud_map_metadata.yaml" />
-<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/robot_sim_variant_20260328/pcd_slices/pointcloud_map.pcd" />    
+<param name="globalmap_pcd" value="/media/scy/新加卷/数据集/autoware_map_output/robot-sim-location/pointcloud_map.pcd" />
+<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/robot-sim-location/pointcloud_map_metadata.yaml" />
+<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/robot-sim-location/pointcloud_map.pcd" />    
       <param name="convert_utm_to_local" value="true" />
       <!-- ndt0.15 -->
       <param name="downsample_resolution" value="0.2" />
@@ -150,8 +156,8 @@
     <!-- hdl_localization_nodelet -->
     <node pkg="nodelet" type="nodelet" name="hdl_localization_nodelet" args="load hdl_localization/HdlLocalizationNodelet $(arg nodelet_manager)">
      <!-- 地图参数 -->
-      <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/robot_sim_variant_20260328/pcd_slices/pointcloud_map_metadata.yaml" />
-      <param name="tile_radius" value="1" />   <!-- 1=3x3, 2=5x5 -->
+      <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/robot-sim-location/pointcloud_map_metadata.yaml" />
+      <param name="tile_radius" value="2" />   <!-- 1=3x3, 2=5x5 -->
 <param name="time_offset_lidar_to_imu" value="0.0" />
 
       <remap from="/velodyne_points" to="$(arg points_topic)" />
@@ -184,11 +190,15 @@
       <param name="frame2frame_reg_method" value="$(arg frame2frame_reg_method)" />
       <param name="enable_score_weighted_fusion" value="$(arg enable_score_weighted_fusion)" />
       <!-- 表示分数控制加权，越小加权越高 -->
-      <param name="ndt_score_good" value="0.012" />
-      <param name="ndt_score_bad" value="0.03" />
+      <param name="ndt_score_good" value="0.06" />
+      <param name="ndt_score_bad" value="0.30" />
 
       <param name="ndt_score_min_confidence" value="0.05" />
       <param name="f2f_score_confidence_gain" value="$(arg f2f_score_confidence_gain)" />
+      <param name="enable_alpha_score_r_inc_fusion" value="$(arg enable_alpha_score_r_inc_fusion)" />
+      <param name="f2f_base_alpha" value="$(arg f2f_base_alpha)" />
+      <param name="f2f_score_confidence_kappa" value="$(arg f2f_score_confidence_kappa)" />
+      <param name="r_inc_axial_gain" value="$(arg r_inc_axial_gain)" />
       <param name="enable_axis_anisotropic_fusion" value="$(arg enable_axis_anisotropic_fusion)" />
       <param name="f2f_axial_conf_gain" value="$(arg f2f_axial_conf_gain)" />
       <param name="f2f_nonaxial_conf_gain" value="$(arg f2f_nonaxial_conf_gain)" />
@@ -221,8 +231,8 @@
       <param name="f2f_min_filtered_points" value="1000" />
       <!-- axis prior (1D along centerline, without cross-section area descriptor) -->
       <param name="enable_axis_prior" value="false" />
-      <param name="axis_centerline_csv" value="/home/scy/catkin_ws_hdl_location/中轴/axis_0416_new5_noalign_centerline.csv" />
-      <param name="axis_profile_csv" value="/home/scy/catkin_ws_hdl_location/中轴/axis_0416_new5_noalign_profile.csv" />
+      <param name="axis_centerline_csv" value="/home/scy/catkin_ws_hdl_location/中轴/axis_tunnel3seg_localization_varspeed_safe_to_last_junction_20260408_180842_centerline.csv" />
+      <param name="axis_profile_csv" value="/home/scy/catkin_ws_hdl_location/中轴/axis_tunnel3seg_localization_varspeed_safe_to_last_junction_20260408_180842_profile.csv" />
       <param name="axis_search_window" value="6.0" />
       <param name="axis_lateral_weight" value="1.0" />
       <param name="axis_vertical_weight" value="0.2" />
@@ -268,13 +278,13 @@
 
       
 <!-- 公司地图参数 -->
-      <param name="init_pos_x" value="-0.001382903" />
-      <param name="init_pos_y" value="0.000937522" />
-      <param name="init_pos_z" value="0.294839931" />
-      <param name="init_ori_w" value="0.999998803" />
-      <param name="init_ori_x" value="-0.000074377" />
-      <param name="init_ori_y" value="0.000003576" />
-      <param name="init_ori_z" value="0.001545503" />
+      <param name="init_pos_x" value="0" />
+      <param name="init_pos_y" value="0" />
+      <param name="init_pos_z" value="0.294844901" />
+      <param name="init_ori_w" value="0.999999967" />
+      <param name="init_ori_x" value="-0.000076944" />
+      <param name="init_ori_y" value="0.000002810" />
+      <param name="init_ori_z" value="-0.000243077" />
 
 
 

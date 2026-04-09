@@ -71,6 +71,10 @@ PoseEstimator::PoseEstimator(
   double ndt_score_bad,
   double ndt_score_min_confidence,
   double f2f_score_confidence_gain,
+  bool enable_alpha_score_r_inc_fusion,
+  double f2f_base_alpha,
+  double f2f_score_confidence_kappa,
+  double r_inc_axial_gain,
   bool enable_axis_anisotropic_fusion,
   double f2f_axial_conf_gain,
   double f2f_nonaxial_conf_gain,
@@ -137,6 +141,10 @@ PoseEstimator::PoseEstimator(
   ndt_score_bad(ndt_score_bad),
   ndt_score_min_confidence(ndt_score_min_confidence),
   f2f_score_confidence_gain(std::max(0.0, f2f_score_confidence_gain)),
+  enable_alpha_score_r_inc_fusion(enable_alpha_score_r_inc_fusion),
+  f2f_base_alpha(std::max(0.0, std::min(1.0, f2f_base_alpha))),
+  f2f_score_confidence_kappa(std::max(0.0, f2f_score_confidence_kappa)),
+  r_inc_axial_gain(std::max(0.0, r_inc_axial_gain)),
   enable_axis_anisotropic_fusion(enable_axis_anisotropic_fusion),
   f2f_axial_conf_gain(std::max(0.0, f2f_axial_conf_gain)),
   f2f_nonaxial_conf_gain(std::max(0.0, f2f_nonaxial_conf_gain)),
@@ -1292,6 +1300,30 @@ double PoseEstimator::score_to_confidence(double score) const {
   return min_conf + (1.0 - min_conf) * normalized;
 }
 
+double PoseEstimator::f2f_score_to_confidence(double score) const {
+  if (!enable_score_weighted_fusion) {
+    return 1.0;
+  }
+  if (!std::isfinite(score)) {
+    return 0.0;
+  }
+  // Paper-friendly single-parameter mapping: better f2f scores give higher confidence,
+  // without relying on hand-picked good/bad thresholds.
+  return std::exp(-f2f_score_confidence_kappa * std::max(0.0, score));
+}
+
+double PoseEstimator::compute_alpha_score_weight(double alpha, double f2f_term, double map_term) const {
+  const double a = std::max(0.0, std::min(1.0, alpha));
+  const double f = std::max(0.0, f2f_term);
+  const double m = std::max(0.0, map_term);
+  const double numerator = a * f;
+  const double denominator = numerator + (1.0 - a) * m;
+  if (denominator <= 1e-9) {
+    return a;
+  }
+  return numerator / denominator;
+}
+
 Eigen::Matrix4f PoseEstimator::fuse_map_and_f2f_pose(
   const Eigen::Matrix4f& map_pose,
   const Eigen::Matrix4f& f2f_pose,
@@ -1305,25 +1337,27 @@ Eigen::Matrix4f PoseEstimator::fuse_map_and_f2f_pose(
   double* out_w_f2f_rot,
   double* out_w_f2f_axial,
   double* out_w_f2f_nonaxial) const {
+  const bool paper_mode = enable_alpha_score_r_inc_fusion;
   const double map_trans_var = std::max(map_trans_noise * map_trans_noise, 1e-9);
   const double f2f_trans_var = std::max(f2f_trans_noise * f2f_trans_noise, 1e-9);
   const double map_rot_var = std::max(map_rot_noise * map_rot_noise, 1e-9);
   const double f2f_rot_var = std::max(f2f_rot_noise * f2f_rot_noise, 1e-9);
 
-  double map_conf = 1.0;
-  double f2f_conf = 1.0;
-  if (enable_score_weighted_fusion) {
-    map_conf = score_to_confidence(map_fitness_score);
-    f2f_conf = score_to_confidence(f2f_fitness_score) * f2f_score_confidence_gain;
-  }
+  const double map_score_conf = paper_mode ? 1.0 : (enable_score_weighted_fusion ? score_to_confidence(map_fitness_score) : 1.0);
+  const double f2f_score_conf = paper_mode ? f2f_score_to_confidence(f2f_fitness_score) :
+                                             (enable_score_weighted_fusion ? score_to_confidence(f2f_fitness_score) : 1.0);
+  const double map_conf = paper_mode ? 1.0 : map_score_conf;
+  const double f2f_conf = paper_mode ? f2f_score_conf : (f2f_score_conf * f2f_score_confidence_gain);
 
   const double inv_map_trans = map_conf / map_trans_var;
   const double inv_f2f_trans = f2f_conf / f2f_trans_var;
   const double inv_map_rot = map_conf / map_rot_var;
   const double inv_f2f_rot = f2f_conf / f2f_rot_var;
 
-  const double w_f2f_trans = inv_f2f_trans / std::max(inv_map_trans + inv_f2f_trans, 1e-9);
-  const double w_f2f_rot = inv_f2f_rot / std::max(inv_map_rot + inv_f2f_rot, 1e-9);
+  double w_f2f_trans = paper_mode ? compute_alpha_score_weight(f2f_base_alpha, f2f_score_conf, 1.0) :
+                                    inv_f2f_trans / std::max(inv_map_trans + inv_f2f_trans, 1e-9);
+  double w_f2f_rot = paper_mode ? w_f2f_trans :
+                                  inv_f2f_rot / std::max(inv_map_rot + inv_f2f_rot, 1e-9);
 
   const Eigen::Vector3f p_map = map_pose.block<3, 1>(0, 3);
   const Eigen::Vector3f p_f2f = f2f_pose.block<3, 1>(0, 3);
@@ -1343,20 +1377,33 @@ Eigen::Matrix4f PoseEstimator::fuse_map_and_f2f_pose(
         const Eigen::Vector3f delta_axial = delta.dot(axis_tangent) * axis_tangent;
         const Eigen::Vector3f delta_nonaxial = delta - delta_axial;
 
-        const double wall_r_axial_scale = compute_wall_r_axial_scale(last_wall_r, map_converged, map_fitness_score);
-        const double inc_static_axial_scale = compute_inc_static_axial_scale(last_r_inc_static);
-        // Strong local wall structure should increase the map-side axial evidence,
-        // while persistent unknown structure should only temper the f2f-side axial evidence.
-        const double adaptive_map_axial_scale = std::max(0.0, std::min(5.0, wall_r_axial_scale));
-        const double adaptive_f2f_axial_scale = std::max(0.0, std::min(5.0, inc_static_axial_scale));
-        const double adaptive_map_nonaxial_scale =
-          enable_map_prior_nonaxial_adaptation ? std::max(0.0, std::min(1.0, map_nonaxial_prior_multiplier)) : 1.0;
-        const double inv_map_axial = (map_conf * map_axial_conf_gain * adaptive_map_axial_scale) / map_trans_var;
-        const double inv_map_nonaxial = (map_conf * map_nonaxial_conf_gain * adaptive_map_nonaxial_scale) / map_trans_var;
-        const double inv_f2f_axial = (f2f_conf * f2f_axial_conf_gain * adaptive_f2f_axial_scale) / f2f_trans_var;
-        const double inv_f2f_nonaxial = (f2f_conf * f2f_nonaxial_conf_gain) / f2f_trans_var;
-        w_f2f_axial = inv_f2f_axial / std::max(inv_map_axial + inv_f2f_axial, 1e-9);
-        w_f2f_nonaxial = inv_f2f_nonaxial / std::max(inv_map_nonaxial + inv_f2f_nonaxial, 1e-9);
+        if (paper_mode) {
+          // Paper-style simplified branch:
+          //   nonaxial = alpha + f2f score confidence + map nonaxial prior
+          //   axial    = alpha + f2f score confidence + r_inc
+          const double r_inc = std::max(0.0, std::min(1.0, last_r_inc_static));
+          const double map_nonaxial_support =
+            enable_map_prior_nonaxial_adaptation ? std::max(0.0, std::min(1.0, map_nonaxial_prior_multiplier)) : 1.0;
+          const double f2f_axial_term = f2f_score_conf * (1.0 + r_inc_axial_gain * r_inc);
+          w_f2f_nonaxial = compute_alpha_score_weight(f2f_base_alpha, f2f_score_conf, map_nonaxial_support);
+          w_f2f_axial = compute_alpha_score_weight(f2f_base_alpha, f2f_axial_term, 1.0);
+          w_f2f_trans = 0.5 * (w_f2f_axial + w_f2f_nonaxial);
+        } else {
+          const double wall_r_axial_scale = compute_wall_r_axial_scale(last_wall_r, map_converged, map_fitness_score);
+          const double inc_static_axial_scale = compute_inc_static_axial_scale(last_r_inc_static);
+          // Strong local wall structure should increase the map-side axial evidence,
+          // while persistent unknown structure should only temper the f2f-side axial evidence.
+          const double adaptive_map_axial_scale = std::max(0.0, std::min(5.0, wall_r_axial_scale));
+          const double adaptive_f2f_axial_scale = std::max(0.0, std::min(5.0, inc_static_axial_scale));
+          const double adaptive_map_nonaxial_scale =
+            enable_map_prior_nonaxial_adaptation ? std::max(0.0, std::min(1.0, map_nonaxial_prior_multiplier)) : 1.0;
+          const double inv_map_axial = (map_conf * map_axial_conf_gain * adaptive_map_axial_scale) / map_trans_var;
+          const double inv_map_nonaxial = (map_conf * map_nonaxial_conf_gain * adaptive_map_nonaxial_scale) / map_trans_var;
+          const double inv_f2f_axial = (f2f_conf * f2f_axial_conf_gain * adaptive_f2f_axial_scale) / f2f_trans_var;
+          const double inv_f2f_nonaxial = (f2f_conf * f2f_nonaxial_conf_gain) / f2f_trans_var;
+          w_f2f_axial = inv_f2f_axial / std::max(inv_map_axial + inv_f2f_axial, 1e-9);
+          w_f2f_nonaxial = inv_f2f_nonaxial / std::max(inv_map_nonaxial + inv_f2f_nonaxial, 1e-9);
+        }
 
         p_fused = p_map + static_cast<float>(w_f2f_axial) * delta_axial + static_cast<float>(w_f2f_nonaxial) * delta_nonaxial;
       }
@@ -1375,10 +1422,10 @@ Eigen::Matrix4f PoseEstimator::fuse_map_and_f2f_pose(
   fused.block<3, 3>(0, 0) = q_fused.toRotationMatrix();
 
   if (out_map_conf) {
-    *out_map_conf = map_conf;
+    *out_map_conf = paper_mode ? 1.0 : map_conf;
   }
   if (out_f2f_conf) {
-    *out_f2f_conf = f2f_conf;
+    *out_f2f_conf = paper_mode ? f2f_score_conf : f2f_conf;
   }
   if (out_w_f2f_trans) {
     *out_w_f2f_trans = w_f2f_trans;
@@ -1623,13 +1670,16 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   // 提取帧到地图位姿
   Eigen::Matrix4f map_pose = reg->getFinalTransformation();
   const double map_fitness_score = reg->getFitnessScore();
-  const bool map_degenerate = (!map_converged) || !std::isfinite(map_fitness_score) || map_fitness_score >= ndt_score_bad;
+  const bool map_degenerate = enable_alpha_score_r_inc_fusion ?
+                                ((!map_converged) || !std::isfinite(map_fitness_score)) :
+                                ((!map_converged) || !std::isfinite(map_fitness_score) || map_fitness_score >= ndt_score_bad);
 
   // 帧间与地图观测融合（按分数与噪声给权重）
   Eigen::Matrix4f selected_pose = map_pose;
   std::string pose_source = "map_only";
   double map_conf = 1.0;
-  const double map_conf_raw = enable_score_weighted_fusion ? score_to_confidence(map_fitness_score) : 1.0;
+  const double map_conf_raw = enable_alpha_score_r_inc_fusion ? 1.0 :
+                                (enable_score_weighted_fusion ? score_to_confidence(map_fitness_score) : 1.0);
   double f2f_conf = 0.0;
   double map_prior_mult = 1.0;
   double map_prior_hit_ratio = 0.0;

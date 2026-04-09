@@ -208,6 +208,11 @@ public:
     } else {
       NODELET_WARN("Pose estimator not initialized yet, will update tiles after first scan");
     }
+
+    // The initial tile request can be published before the map server
+    // subscriber is fully connected. Retry a few times until /globalmap
+    // is actually received so bag playback can start only after map load.
+    initial_tile_retry_timer_ = nh.createWallTimer(ros::WallDuration(1.0), &HdlLocalizationNodelet::retryInitialTileRequest, this);
   }
 
 private:
@@ -377,6 +382,55 @@ private:
     }
   }
 
+  void retryInitialTileRequest(const ros::WallTimerEvent&) {
+    if (globalmap && !globalmap->empty()) {
+      initial_tile_retry_timer_.stop();
+      return;
+    }
+
+    if (!pose_estimator) {
+      return;
+    }
+
+    if (initial_tile_retry_count_ >= max_initial_tile_retry_count_) {
+      NODELET_WARN("Initial tile request retry budget exhausted before /globalmap arrived");
+      initial_tile_retry_timer_.stop();
+      return;
+    }
+
+    const Eigen::Vector3f pos = pose_estimator->pos();
+    const int ix = static_cast<int>(std::floor(pos.x() / x_res));
+    const int iy = static_cast<int>(std::floor(pos.y() / y_res));
+    const int x_res_i = static_cast<int>(std::lround(x_res));
+    const int y_res_i = static_cast<int>(std::lround(y_res));
+    const int origin_x = ix * x_res_i;
+    const int origin_y = iy * y_res_i;
+
+    auto need_tiles = computeRequiredTilesByOrigin(origin_x, origin_y);
+    if (need_tiles.empty()) {
+      initial_tile_retry_count_++;
+      NODELET_WARN("Initial tile retry %d/%d found no tiles near (%.2f, %.2f, %.2f)",
+                   initial_tile_retry_count_, max_initial_tile_retry_count_, pos.x(), pos.y(), pos.z());
+      return;
+    }
+
+    tile_origin_inited_ = true;
+    stable_origin_x_ = origin_x;
+    stable_origin_y_ = origin_y;
+    cand_origin_x_ = origin_x;
+    cand_origin_y_ = origin_y;
+    cand_count_ = 0;
+    last_tile_eval_pos_ = pos;
+    last_tile_eval_pos_inited_ = true;
+
+    publishTileRequest(need_tiles);
+    last_tiles_sorted_ = need_tiles;
+    initial_tile_retry_count_++;
+    NODELET_WARN("Retrying initial tile request %d/%d with %zu tiles at (%.2f, %.2f, %.2f)",
+                 initial_tile_retry_count_, max_initial_tile_retry_count_, need_tiles.size(),
+                 pos.x(), pos.y(), pos.z());
+  }
+
   void initialize_params() {
     // intialize scan matching method
     double downsample_resolution = private_nh.param<double>("downsample_resolution", 0.1);
@@ -412,6 +466,10 @@ private:
         private_nh.param<double>("ndt_score_bad", 1.5),
         private_nh.param<double>("ndt_score_min_confidence", 0.05),
         private_nh.param<double>("f2f_score_confidence_gain", 1.0),
+        private_nh.param<bool>("enable_alpha_score_r_inc_fusion", false),
+        private_nh.param<double>("f2f_base_alpha", 0.1),
+        private_nh.param<double>("f2f_score_confidence_kappa", 5.0),
+        private_nh.param<double>("r_inc_axial_gain", 1.0),
         private_nh.param<bool>("enable_axis_anisotropic_fusion", false),
         private_nh.param<double>("f2f_axial_conf_gain", 2.0),
         private_nh.param<double>("f2f_nonaxial_conf_gain", 0.5),
@@ -798,6 +856,7 @@ private:
   // 新线程地图
   void globalmapCallback(const sensor_msgs::PointCloud2ConstPtr& msg) {
     NODELET_WARN("globalmapCallback received");
+    initial_tile_retry_timer_.stop();
     pcl::PointCloud<PointT>::Ptr new_map(new pcl::PointCloud<PointT>());
     pcl::fromROSMsg(*msg, *new_map);
 
@@ -879,6 +938,10 @@ private:
       private_nh.param<double>("ndt_score_bad", 1.5),
       private_nh.param<double>("ndt_score_min_confidence", 0.05),
       private_nh.param<double>("f2f_score_confidence_gain", 1.0),
+      private_nh.param<bool>("enable_alpha_score_r_inc_fusion", false),
+      private_nh.param<double>("f2f_base_alpha", 0.1),
+      private_nh.param<double>("f2f_score_confidence_kappa", 5.0),
+      private_nh.param<double>("r_inc_axial_gain", 1.0),
       private_nh.param<bool>("enable_axis_anisotropic_fusion", false),
       private_nh.param<double>("f2f_axial_conf_gain", 2.0),
       private_nh.param<double>("f2f_nonaxial_conf_gain", 0.5),
@@ -962,6 +1025,10 @@ private:
       private_nh.param<double>("ndt_score_bad", 1.5),
       private_nh.param<double>("ndt_score_min_confidence", 0.05),
       private_nh.param<double>("f2f_score_confidence_gain", 1.0),
+      private_nh.param<bool>("enable_alpha_score_r_inc_fusion", false),
+      private_nh.param<double>("f2f_base_alpha", 0.1),
+      private_nh.param<double>("f2f_score_confidence_kappa", 5.0),
+      private_nh.param<double>("r_inc_axial_gain", 1.0),
       private_nh.param<bool>("enable_axis_anisotropic_fusion", false),
       private_nh.param<double>("f2f_axial_conf_gain", 2.0),
       private_nh.param<double>("f2f_nonaxial_conf_gain", 0.5),
@@ -1302,6 +1369,9 @@ private:
 
   // last_tiles 必须保存“排序后”的版本
   std::vector<std::string> last_tiles_sorted_;
+  ros::WallTimer initial_tile_retry_timer_;
+  int initial_tile_retry_count_ = 0;
+  const int max_initial_tile_retry_count_ = 10;
 };
 }  // namespace hdl_localization
 

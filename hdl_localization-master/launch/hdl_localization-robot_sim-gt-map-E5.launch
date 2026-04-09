@@ -34,6 +34,11 @@
   <arg name="enable_score_weighted_fusion" default="true" />
   <!-- 为0时，只提供初值，不提供后面的融合 -->
   <arg name="f2f_score_confidence_gain" default="0.25" />
+  <!-- 论文版简化融合：只保留 alpha + f2f score + r_inc；非轴向再接入 penalty-only prior -->
+  <arg name="enable_alpha_score_r_inc_fusion" default="true" />
+  <arg name="f2f_base_alpha" default="0.1" />
+  <arg name="f2f_score_confidence_kappa" default="5.0" />
+  <arg name="r_inc_axial_gain" default="1.0" />
   <!-- 是否启用方向相关融合。
        true: 平移分为 axial / nonaxial 分别加权；
        false: 只使用统一的 w_f2f_t 做各向同性平移融合 -->
@@ -189,6 +194,10 @@
 
       <param name="ndt_score_min_confidence" value="0.05" />
       <param name="f2f_score_confidence_gain" value="$(arg f2f_score_confidence_gain)" />
+      <param name="enable_alpha_score_r_inc_fusion" value="$(arg enable_alpha_score_r_inc_fusion)" />
+      <param name="f2f_base_alpha" value="$(arg f2f_base_alpha)" />
+      <param name="f2f_score_confidence_kappa" value="$(arg f2f_score_confidence_kappa)" />
+      <param name="r_inc_axial_gain" value="$(arg r_inc_axial_gain)" />
       <param name="enable_axis_anisotropic_fusion" value="$(arg enable_axis_anisotropic_fusion)" />
       <param name="f2f_axial_conf_gain" value="$(arg f2f_axial_conf_gain)" />
       <param name="f2f_nonaxial_conf_gain" value="$(arg f2f_nonaxial_conf_gain)" />

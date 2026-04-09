@@ -58,6 +58,10 @@ public:
     double ndt_score_bad = 1.5,
     double ndt_score_min_confidence = 0.05,
     double f2f_score_confidence_gain = 1.0,
+    bool enable_alpha_score_r_inc_fusion = false,
+    double f2f_base_alpha = 0.1,
+    double f2f_score_confidence_kappa = 5.0,
+    double r_inc_axial_gain = 1.0,
     bool enable_axis_anisotropic_fusion = false,
     double f2f_axial_conf_gain = 2.0,
     double f2f_nonaxial_conf_gain = 0.5,
@@ -179,6 +183,8 @@ private:
     double* out_w_f2f_axial = nullptr,
     double* out_w_f2f_nonaxial = nullptr) const;
   double score_to_confidence(double score) const;
+  double f2f_score_to_confidence(double score) const;
+  double compute_alpha_score_weight(double alpha, double f2f_term, double map_term) const;
   bool load_axis_centerline_csv(const std::string& path);
   bool load_axis_profile_csv(const std::string& path);
   bool interpolate_axis_sample(double s, Eigen::Vector3f* point, Eigen::Vector3f* tangent) const;
@@ -268,6 +274,10 @@ private:
   double ndt_score_bad;
   double ndt_score_min_confidence;
   double f2f_score_confidence_gain;
+  bool enable_alpha_score_r_inc_fusion;
+  double f2f_base_alpha;
+  double f2f_score_confidence_kappa;
+  double r_inc_axial_gain;
   bool enable_axis_anisotropic_fusion;
   double f2f_axial_conf_gain;
   double f2f_nonaxial_conf_gain;

@@ -193,6 +193,12 @@ def main() -> None:
     )
     parser.add_argument("--output-prefix", default="/tmp/axis_profile", help="Output prefix path")
     parser.add_argument("--z-offset", type=float, default=1.5, help="Centerline height offset relative to vehicle pose")
+    parser.add_argument(
+        "--z-centerline-absolute",
+        type=float,
+        default=None,
+        help="Absolute z for centerline. If set, overrides --z-offset and keeps z_centerline fixed.",
+    )
     parser.add_argument("--bin-size", type=float, default=1.0, help="z(s) bin size in meters")
     parser.add_argument("--sample-step", type=float, default=0.5, help="Polyline sampling step for alignment")
     parser.add_argument("--centerline-step", type=float, default=1.0, help="Centerline output sampling step")
@@ -225,7 +231,10 @@ def main() -> None:
               "Check centerline points or enable --auto-se2.")
 
     s_centers, z_med, z_std, counts = robust_profile(s_traj[use], traj_z[use], s_total, args.bin_size)
-    z_center = z_med + args.z_offset
+    if args.z_centerline_absolute is not None:
+        z_center = np.full_like(z_med, float(args.z_centerline_absolute))
+    else:
+        z_center = z_med + args.z_offset
 
     s_out, xy_out = sample_polyline(ctrl, args.centerline_step)
     z_out = np.interp(s_out, s_centers, z_center)
