@@ -77,8 +77,13 @@
   <arg name="inc_static_reference_voxel_size_arg" default="2.0" />
   
 
+  <arg name="log_output_dir" default="/home/scy/catkin_ws_hdl_location/logs/0416_gt_low_perturbation" />
   <arg name="enable_reg_debug_csv" default="true" />
-  <arg name="reg_debug_csv_path" default="/home/scy/catkin_ws_hdl_location/reg_debug_0416_gt-最终测试.csv" />
+  <!-- 主线程定位耗时指标 + 定位状态指标 -->
+  <arg name="reg_debug_csv_path" default="$(arg log_output_dir)/main_thread_localization_metrics.csv" />
+  <!-- 后台地图调度指标 -->
+  <arg name="enable_tile_timing_csv" default="true" />
+  <arg name="tile_timing_csv_path" default="$(arg log_output_dir)/background_map_scheduling_metrics.csv" />
   <arg name="enable_robot_odometry_prediction" value="false" />
   <arg name="robot_odom_frame_id" value="odom" />
   <arg name="plot_estimation_errors" value="false" />
@@ -169,7 +174,7 @@
       <param name="robot_odom_frame_id" value="$(arg robot_odom_frame_id)" />
       <!-- ndt settings -->
       <!-- available reg_methods:FAST_GICP, NDT_OMP, NDT_CUDA_P2D, NDT_CUDA_D2D，FAST_VGICP，GICP，FAST_VGICP,FAST_GICP-->
-      <param name="reg_method" value="NDT_OMP" />
+      <param name="reg_method" value="NDT_CUDA_P2D" />
       <!-- if NDT is slow for your PC, try DIRECT1，DIRECT7，KDTREE serach method, which is a bit unstable but extremely fast -->
       <param name="ndt_neighbor_search_method" value="KDTREE" />
       <param name="ndt_neighbor_search_radius" value="2.0" />
@@ -246,6 +251,8 @@
       <param name="map_prior_conf_floor" value="$(eval '0.15' if arg('map_prior_experiment_preset') in ['conservative', 'mild_boost'] else arg('map_prior_conf_floor_arg'))" />
       <param name="enable_reg_debug_csv" value="$(arg enable_reg_debug_csv)" />
       <param name="reg_debug_csv_path" value="$(arg reg_debug_csv_path)" />
+      <param name="enable_tile_timing_csv" value="$(arg enable_tile_timing_csv)" />
+      <param name="tile_timing_csv_path" value="$(arg tile_timing_csv_path)" />
       <!-- <param name="ndt_neighbor_search_radius" value="1.0" />
       <param name="ndt_resolution" value="0.6" /> -->
       <!-- 初始0.1，会有个别帧索引溢出的问题 -->

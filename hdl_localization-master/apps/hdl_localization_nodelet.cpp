@@ -2,6 +2,11 @@
 #include <memory>
 #include <iostream>
 #include <algorithm>
+#include <chrono>
+#include <iomanip>
+#include <cerrno>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include <ros/ros.h>
 #include <pcl_ros/point_cloud.h>
@@ -62,6 +67,43 @@
 
 namespace hdl_localization {
 
+namespace {
+bool ensure_directory_exists(const std::string& dir_path) {
+  if (dir_path.empty()) {
+    return true;
+  }
+
+  std::string current;
+  if (dir_path.front() == '/') {
+    current = "/";
+  }
+
+  std::stringstream ss(dir_path);
+  std::string part;
+  while (std::getline(ss, part, '/')) {
+    if (part.empty()) {
+      continue;
+    }
+    if (!current.empty() && current.back() != '/') {
+      current += "/";
+    }
+    current += part;
+    if (::mkdir(current.c_str(), 0755) != 0 && errno != EEXIST) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ensure_parent_dir_for_file(const std::string& file_path) {
+  const std::size_t slash = file_path.find_last_of('/');
+  if (slash == std::string::npos) {
+    return true;
+  }
+  return ensure_directory_exists(file_path.substr(0, slash));
+}
+}  // namespace
+
 class HdlLocalizationNodelet : public nodelet::Nodelet {
 public:
   using PointT = pcl::PointXYZI;
@@ -83,6 +125,11 @@ public:
       registration.reset();
     }
 
+    if (tile_timing_csv_stream_.is_open()) {
+      tile_timing_csv_stream_.flush();
+      tile_timing_csv_stream_.close();
+    }
+
     NODELET_INFO("Nodelet cleanup completed");
   }
 
@@ -92,6 +139,7 @@ public:
     private_nh = getPrivateNodeHandle();
 
     initialize_params();
+    init_tile_timing_csv();
 
     robot_odom_frame_id = private_nh.param<std::string>("robot_odom_frame_id", "robot_odom");
     odom_child_frame_id = private_nh.param<std::string>("odom_child_frame_id", "base_link");
@@ -299,7 +347,7 @@ private:
     // }
     else if (reg_method == "FAST_GICP") {
       NODELET_INFO("FAST_GICP is selected");
-      std::cout << "registration: FAST_GICP" << std::endl;
+      // std::cout << "registration: FAST_GICP" << std::endl;
 
       fast_gicp::FastGICP<PointT, PointT>::Ptr fast_gicp(new fast_gicp::FastGICP<PointT, PointT>());
       fast_gicp->setNumThreads(6);
@@ -315,7 +363,7 @@ private:
       return fast_gicp;
     } else if (reg_method == "FAST_VGICP") {
       // 理论上更适合隧道
-      std::cout << "registration: FAST_VGICP" << std::endl;
+      // std::cout << "registration: FAST_VGICP" << std::endl;
       fast_gicp::FastVGICP<PointT, PointT>::Ptr vgicp(new fast_gicp::FastVGICP<PointT, PointT>());
       // setNumThreads（0）自动根据硬件线程数选择并行线程数。
       // 原参数
@@ -342,7 +390,7 @@ private:
       /* code */
     } else if (reg_method == "ICP") {
       NODELET_INFO("ICP (Point-to-Point) is selected");
-      std::cout << "registration: ICP" << std::endl;
+      // std::cout << "registration: ICP" << std::endl;
 
       pcl::IterativeClosestPoint<PointT, PointT>::Ptr icp(new pcl::IterativeClosestPoint<PointT, PointT>());
 
@@ -469,6 +517,65 @@ private:
     }
   }
 
+  void init_tile_timing_csv() {
+    tile_timing_csv_enabled_ = private_nh.param<bool>("enable_tile_timing_csv", true);
+    tile_timing_csv_path_ = private_nh.param<std::string>("tile_timing_csv_path", std::string(""));
+
+    if (!tile_timing_csv_enabled_) {
+      return;
+    }
+
+    if (tile_timing_csv_path_.empty()) {
+      const std::string reg_debug_csv_path = private_nh.param<std::string>("reg_debug_csv_path", std::string(""));
+      if (!reg_debug_csv_path.empty()) {
+        const std::size_t slash = reg_debug_csv_path.find_last_of('/');
+        tile_timing_csv_path_ = (slash == std::string::npos) ? "tile_timing.csv" : (reg_debug_csv_path.substr(0, slash + 1) + "tile_timing.csv");
+      } else {
+        tile_timing_csv_path_ = "/tmp/tile_timing.csv";
+      }
+    }
+
+    if (!ensure_parent_dir_for_file(tile_timing_csv_path_)) {
+      tile_timing_csv_enabled_ = false;
+      NODELET_WARN_STREAM("tile timing csv disabled: failed to create parent directory for path: " << tile_timing_csv_path_);
+      return;
+    }
+
+    tile_timing_csv_stream_.open(tile_timing_csv_path_, std::ios::out | std::ios::trunc);
+    if (!tile_timing_csv_stream_.is_open()) {
+      tile_timing_csv_enabled_ = false;
+      NODELET_WARN_STREAM("tile timing csv disabled: failed to open path: " << tile_timing_csv_path_);
+      return;
+    }
+
+    tile_timing_csv_stream_ << "stamp,event,tile_count,prep_ms,request_to_apply_ms,extra,tiles\n";
+    NODELET_INFO_STREAM("tile timing csv enabled: " << tile_timing_csv_path_);
+  }
+
+  void log_tile_timing_event(const ros::Time& stamp, const std::string& event, std::size_t tile_count, double prep_ms, double request_to_apply_ms, const std::string& extra,
+                             const std::vector<std::string>& tiles) {
+    if (!tile_timing_csv_enabled_ || !tile_timing_csv_stream_.is_open()) {
+      return;
+    }
+
+    std::ostringstream joined_tiles;
+    for (std::size_t i = 0; i < tiles.size(); ++i) {
+      if (i) joined_tiles << "|";
+      joined_tiles << tiles[i];
+    }
+
+    std::lock_guard<std::mutex> lock(tile_timing_csv_mutex_);
+    tile_timing_csv_stream_ << std::fixed << std::setprecision(9) << stamp.toSec() << "," << event << "," << tile_count << "," << prep_ms << "," << request_to_apply_ms
+                            << "," << extra << "," << joined_tiles.str() << "\n";
+  }
+
+  ros::Time resolve_log_stamp(const ros::Time& preferred) const {
+    if (!preferred.isZero()) {
+      return preferred;
+    }
+    return ros::Time::now();
+  }
+
 private:
   /**
    * @brief callback for imu data
@@ -486,13 +593,24 @@ private:
   void points_callback(const sensor_msgs::PointCloud2ConstPtr& points_msg) {
     if (has_prepared_.load(std::memory_order_acquire)) {
       pcl::Registration<PointT, PointT>::Ptr reg;
+      ros::Time prepared_stamp;
+      std::vector<std::string> prepared_tiles;
+      double prepared_prep_ms = 0.0;
       {
         std::lock_guard<std::mutex> lk(prepared_mutex_);
         reg = prepared_reg_;  // 拿到 shared_ptr 副本
+        prepared_stamp = prepared_stamp_;
+        prepared_tiles = prepared_tiles_;
+        prepared_prep_ms = prepared_prep_ms_;
         has_prepared_.store(false, std::memory_order_release);
       }
       if (reg && pose_estimator) {
         pose_estimator->set_registration(reg);  // 内部只短暂锁一下
+        double request_to_apply_ms = 0.0;
+        if (last_tile_request_tp_valid_) {
+          request_to_apply_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - last_tile_request_tp_).count();
+        }
+        log_tile_timing_event(resolve_log_stamp(points_msg->header.stamp), "apply_registration", prepared_tiles.size(), prepared_prep_ms, request_to_apply_ms, "map_swap", prepared_tiles);
       }
     }
 
@@ -695,7 +813,6 @@ private:
     if (need_tiles != last_tiles_sorted_) {
       publishTileRequest(need_tiles);
       last_tiles_sorted_ = need_tiles;
-      NODELET_INFO("Number of tiles needed: %zu", need_tiles.size());
     }
   }
 
@@ -762,11 +879,15 @@ private:
       return;
     }
 
+    last_tile_request_stamp_ = ros::Time::now();
+    last_tile_request_tp_ = std::chrono::steady_clock::now();
+    last_tile_request_tp_valid_ = true;
+    last_requested_tiles_ = tiles;
     hdl_localization::TileRequest msg;
     msg.tiles = tiles;
     tile_request_pub.publish(msg);
 
-    NODELET_INFO("Requesting %zu tiles.", tiles.size());
+    log_tile_timing_event(resolve_log_stamp(last_tile_request_stamp_), "request_tiles", tiles.size(), 0.0, 0.0, "publish_request", tiles);
   }
 
   /**
@@ -797,7 +918,6 @@ private:
 
   // 新线程地图
   void globalmapCallback(const sensor_msgs::PointCloud2ConstPtr& msg) {
-    NODELET_WARN("globalmapCallback received");
     pcl::PointCloud<PointT>::Ptr new_map(new pcl::PointCloud<PointT>());
     pcl::fromROSMsg(*msg, *new_map);
 
@@ -813,13 +933,22 @@ private:
     auto t0 = std::chrono::steady_clock::now();
     reg->setInputTarget(new_map);
     auto t1 = std::chrono::steady_clock::now();
-    std::cout << "[PREHEAT] setTarget ms=" << std::chrono::duration<double, std::milli>(t1 - t0).count() << ", pts=" << new_map->size() << std::endl;
+    const double prep_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    // std::cout << "[PREHEAT] setTarget ms=" << prep_ms << ", pts=" << new_map->size() << std::endl;
+    double request_to_ready_ms = 0.0;
+    if (last_tile_request_tp_valid_) {
+      request_to_ready_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - last_tile_request_tp_).count();
+    }
+    log_tile_timing_event(resolve_log_stamp(msg->header.stamp), "prepared_registration", last_requested_tiles_.size(), prep_ms, request_to_ready_ms, "map_ready", last_requested_tiles_);
 
     // 3) 放到 prepared 槽位（覆盖旧的 prepared，不会累积）
     {
       std::lock_guard<std::mutex> lk(prepared_mutex_);
       prepared_reg_ = reg;
       prepared_map_ = new_map;
+      prepared_stamp_ = msg->header.stamp;
+      prepared_tiles_ = last_requested_tiles_;
+      prepared_prep_ms_ = prep_ms;
       has_prepared_.store(true, std::memory_order_release);
     }
 
@@ -1271,6 +1400,9 @@ private:
   pcl::Registration<PointT, PointT>::Ptr prepared_reg_;
   pcl::PointCloud<PointT>::Ptr prepared_map_;
   std::atomic<bool> has_prepared_{false};
+  ros::Time prepared_stamp_;
+  std::vector<std::string> prepared_tiles_;
+  double prepared_prep_ms_ = 0.0;
 
   // pcl::PointCloud<PointT>::Ptr globalmap{nullptr};
   std::set<std::string> loaded_tiles;
@@ -1302,6 +1434,14 @@ private:
 
   // last_tiles 必须保存“排序后”的版本
   std::vector<std::string> last_tiles_sorted_;
+  ros::Time last_tile_request_stamp_;
+  std::chrono::steady_clock::time_point last_tile_request_tp_;
+  bool last_tile_request_tp_valid_ = false;
+  std::vector<std::string> last_requested_tiles_;
+  bool tile_timing_csv_enabled_ = false;
+  std::string tile_timing_csv_path_;
+  std::ofstream tile_timing_csv_stream_;
+  std::mutex tile_timing_csv_mutex_;
 };
 }  // namespace hdl_localization
 

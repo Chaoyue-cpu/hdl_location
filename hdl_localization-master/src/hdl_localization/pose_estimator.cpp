@@ -9,9 +9,14 @@
 #include <sstream>
 #include <unordered_set>
 #include <iomanip>
+#include <chrono>
+#include <cerrno>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/common/transforms.h>
+#include <pcl/registration/ndt.h>
 #include <pclomp/ndt_omp.h>
 #include <fast_gicp/gicp/fast_gicp.hpp>
 #include <fast_gicp/gicp/impl/fast_gicp_impl.hpp>
@@ -42,6 +47,47 @@ struct VoxelKeyHash {
 VoxelKey to_voxel_key(const Eigen::Vector3f& p, double voxel_size) {
   const float inv = 1.0f / static_cast<float>(voxel_size);
   return VoxelKey{static_cast<int>(std::floor(p.x() * inv)), static_cast<int>(std::floor(p.y() * inv)), static_cast<int>(std::floor(p.z() * inv))};
+}
+}  // namespace
+
+namespace {
+double elapsed_ms(const std::chrono::steady_clock::time_point& start, const std::chrono::steady_clock::time_point& end) {
+  return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+bool ensure_directory_exists(const std::string& dir_path) {
+  if (dir_path.empty()) {
+    return true;
+  }
+
+  std::string current;
+  if (dir_path.front() == '/') {
+    current = "/";
+  }
+
+  std::stringstream ss(dir_path);
+  std::string part;
+  while (std::getline(ss, part, '/')) {
+    if (part.empty()) {
+      continue;
+    }
+    if (!current.empty() && current.back() != '/') {
+      current += "/";
+    }
+    current += part;
+    if (::mkdir(current.c_str(), 0755) != 0 && errno != EEXIST) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ensure_parent_dir_for_file(const std::string& file_path) {
+  const std::size_t slash = file_path.find_last_of('/');
+  if (slash == std::string::npos) {
+    return true;
+  }
+  return ensure_directory_exists(file_path.substr(0, slash));
 }
 }  // namespace
 
@@ -272,7 +318,7 @@ PoseEstimator::PoseEstimator(
     f2f_fast_gicp->setMaxCorrespondenceDistance(2.0);
     f2f_fast_gicp->setCorrespondenceRandomness(20);
     frame2frame_registration = f2f_fast_gicp;
-    ROS_INFO_STREAM("frame-to-frame registration: FAST_GICP");
+    // ROS_INFO_STREAM("frame-to-frame registration: FAST_GICP");
   } else {
     if (f2f_method_upper != "NDT_OMP") {
       ROS_WARN_STREAM("unknown frame2frame_reg_method: " << frame2frame_reg_method << ", fallback to NDT_OMP");
@@ -284,7 +330,7 @@ PoseEstimator::PoseEstimator(
     ndt->setNumThreads(std::max(1, frame_to_frame_reg_num_threads));
     ndt->setNeighborhoodSearchMethod(pclomp::DIRECT7);
     frame2frame_registration = ndt;
-    ROS_INFO_STREAM("frame-to-frame registration: NDT_OMP");
+    // ROS_INFO_STREAM("frame-to-frame registration: NDT_OMP");
   }
 
   const bool need_axis_centerline = enable_axis_prior || enable_axis_anisotropic_fusion;
@@ -300,13 +346,13 @@ PoseEstimator::PoseEstimator(
         this->enable_axis_anisotropic_fusion = false;
       }
     } else {
-      ROS_INFO_STREAM("axis centerline loaded: samples=" << axis_centerline.size());
+      // ROS_INFO_STREAM("axis centerline loaded: samples=" << axis_centerline.size());
       if (enable_axis_prior) {
         const bool ok_profile = load_axis_profile_csv(axis_profile_csv);
         if (!ok_profile) {
           ROS_WARN_STREAM("axis profile csv missing or invalid, axis prior will use XY only: " << axis_profile_csv);
         } else {
-          ROS_INFO_STREAM("axis prior profile loaded: profile_samples=" << axis_profile.size());
+          // ROS_INFO_STREAM("axis prior profile loaded: profile_samples=" << axis_profile.size());
         }
       }
       double init_s = 0.0;
@@ -314,9 +360,9 @@ PoseEstimator::PoseEstimator(
       if (project_to_axis(pos, &init_s, &init_lateral)) {
         last_axis_s = init_s;
         if (enable_axis_prior) {
-          ROS_INFO_STREAM("axis prior init from pose: s=" << init_s << " lateral=" << init_lateral);
+          // ROS_INFO_STREAM("axis prior init from pose: s=" << init_s << " lateral=" << init_lateral);
         } else if (enable_axis_anisotropic_fusion) {
-          ROS_INFO_STREAM("axis anisotropic fusion init from pose: s=" << init_s << " lateral=" << init_lateral);
+          // ROS_INFO_STREAM("axis anisotropic fusion init from pose: s=" << init_s << " lateral=" << init_lateral);
         }
       } else {
         ROS_WARN_STREAM("failed to project initial pose to centerline");
@@ -329,7 +375,7 @@ PoseEstimator::PoseEstimator(
       ROS_WARN_STREAM("map prior layer disabled: failed to load csv: " << map_prior_csv);
       this->enable_map_prior_layer = false;
     } else {
-      ROS_INFO_STREAM("map prior layer loaded: cells=" << map_prior_cells.size() << " voxel_size=" << map_prior_voxel_size);
+      // ROS_INFO_STREAM("map prior layer loaded: cells=" << map_prior_cells.size() << " voxel_size=" << map_prior_voxel_size);
     }
   }
 
@@ -338,8 +384,8 @@ PoseEstimator::PoseEstimator(
     if (!load_prior_csv_into(inc_static_csv_path, &inc_static_reference_cells)) {
       ROS_WARN_STREAM("inc_static axial adaptation will be ineffective: failed to load reference voxel csv: " << inc_static_csv_path);
     } else {
-      ROS_INFO_STREAM("inc_static reference voxel table loaded: cells=" << inc_static_reference_cells.size()
-                      << " voxel_size=" << this->inc_static_reference_voxel_size);
+      // ROS_INFO_STREAM("inc_static reference voxel table loaded: cells=" << inc_static_reference_cells.size()
+      //                 << " voxel_size=" << this->inc_static_reference_voxel_size);
     }
   }
 
@@ -348,6 +394,11 @@ PoseEstimator::PoseEstimator(
       ROS_WARN_STREAM("reg debug csv disabled: empty path");
       this->enable_reg_debug_csv = false;
     } else {
+      if (!ensure_parent_dir_for_file(this->reg_debug_csv_path)) {
+        ROS_WARN_STREAM("reg debug csv disabled: failed to create parent directory for path: " << this->reg_debug_csv_path);
+        this->enable_reg_debug_csv = false;
+        return;
+      }
       reg_debug_csv_stream.open(this->reg_debug_csv_path, std::ios::out | std::ios::trunc);
       if (!reg_debug_csv_stream.is_open()) {
         ROS_WARN_STREAM("reg debug csv disabled: failed to open path: " << this->reg_debug_csv_path);
@@ -360,9 +411,10 @@ PoseEstimator::PoseEstimator(
           << "prior_mult,prior_hit_ratio,prior_avg_conf,prior_core_hit_ratio,prior_band_hit_ratio,prior_inner_hit_ratio,"
           << "wall_ratio_inner,wall_relief_inner,wall_r,wall_r_axial_scale,"
           << "inc_unknown_ratio,inc_stable_ratio,r_inc_static,inc_static_axial_scale,"
+          << "f2f_filter_ms,f2f_align_ms,f2f_total_ms,"
+          << "map_align_wall_ms,map_align_cpu_ms,map_ndt_iterations,wall_metrics_ms,inc_static_ms,map_prior_ms,fusion_ms,axis_prealign_ms,axis_postalign_ms,total_correction_ms,"
           << "px,py,pz,qw,qx,qy,qz\n";
-        reg_debug_csv_stream.flush();
-        ROS_INFO_STREAM("reg debug csv enabled: " << this->reg_debug_csv_path);
+        // ROS_INFO_STREAM("reg debug csv enabled: " << this->reg_debug_csv_path);
       }
     }
   }
@@ -676,7 +728,15 @@ bool PoseEstimator::compute_f2f_absolute_pose(
   const pcl::PointCloud<PointT>::ConstPtr& cloud,
   const Eigen::Matrix4f& init_guess,
   Eigen::Matrix4f* f2f_absolute_pose,
-  double* f2f_fitness_score) {
+  double* f2f_fitness_score,
+  double* f2f_filter_ms,
+  double* f2f_align_ms,
+  double* f2f_total_ms) {
+  if (f2f_filter_ms) *f2f_filter_ms = 0.0;
+  if (f2f_align_ms) *f2f_align_ms = 0.0;
+  if (f2f_total_ms) *f2f_total_ms = 0.0;
+
+  const auto t_f2f_total_begin = std::chrono::steady_clock::now();
   if (!enable_frame2frame_ndt || !frame2frame_registration || !prev_cloud || !f2f_absolute_pose) {
     return false;
   }
@@ -684,15 +744,20 @@ bool PoseEstimator::compute_f2f_absolute_pose(
   const Eigen::Matrix4f init_rel = prev_map_pose.inverse() * init_guess;
   pcl::PointCloud<PointT> aligned;
   auto run_align = [&](const pcl::PointCloud<PointT>::ConstPtr& target, const pcl::PointCloud<PointT>::ConstPtr& source) {
+    const auto t_align_begin = std::chrono::steady_clock::now();
     frame2frame_registration->setInputTarget(target);
     frame2frame_registration->setInputSource(source);
     aligned.clear();
     frame2frame_registration->align(aligned, init_rel);
+    if (f2f_align_ms) {
+      *f2f_align_ms += elapsed_ms(t_align_begin, std::chrono::steady_clock::now());
+    }
     return frame2frame_registration->hasConverged();
   };
 
   bool converged = false;
   if (enable_f2f_confidence_filter) {
+    const auto t_filter_begin = std::chrono::steady_clock::now();
     pcl::PointCloud<PointT>::Ptr filtered_target(new pcl::PointCloud<PointT>());
     pcl::PointCloud<PointT>::Ptr filtered_source(new pcl::PointCloud<PointT>());
     filtered_target->reserve(prev_cloud->size());
@@ -751,6 +816,9 @@ bool PoseEstimator::compute_f2f_absolute_pose(
 
     const bool enough_filtered_points =
       filtered_target->size() >= static_cast<std::size_t>(f2f_min_filtered_points) && filtered_source->size() >= static_cast<std::size_t>(f2f_min_filtered_points);
+    if (f2f_filter_ms) {
+      *f2f_filter_ms += elapsed_ms(t_filter_begin, std::chrono::steady_clock::now());
+    }
     if (enough_filtered_points) {
       converged = run_align(filtered_target, filtered_source);
     }
@@ -761,12 +829,18 @@ bool PoseEstimator::compute_f2f_absolute_pose(
   }
 
   if (!converged) {
+    if (f2f_total_ms) {
+      *f2f_total_ms = elapsed_ms(t_f2f_total_begin, std::chrono::steady_clock::now());
+    }
     return false;
   }
 
   *f2f_absolute_pose = prev_map_pose * frame2frame_registration->getFinalTransformation();
   if (f2f_fitness_score) {
     *f2f_fitness_score = frame2frame_registration->getFitnessScore();
+  }
+  if (f2f_total_ms) {
+    *f2f_total_ms = elapsed_ms(t_f2f_total_begin, std::chrono::steady_clock::now());
   }
   return true;
 }
@@ -874,7 +948,7 @@ bool PoseEstimator::load_prior_csv_into(
     }
   }
 
-  ROS_INFO_STREAM("map prior csv loaded cells=" << loaded);
+  // ROS_INFO_STREAM("map prior csv loaded cells=" << loaded);
   return loaded > 0;
 }
 
@@ -1233,6 +1307,19 @@ void PoseEstimator::write_reg_debug_row(
   double inc_stable_ratio,
   double r_inc_static,
   double inc_static_axial_scale,
+  double f2f_filter_ms,
+  double f2f_align_ms,
+  double f2f_total_ms,
+  double map_align_wall_ms,
+  double map_align_cpu_ms,
+  double map_ndt_iterations,
+  double wall_metrics_ms,
+  double inc_static_ms,
+  double map_prior_ms,
+  double fusion_ms,
+  double axis_prealign_ms,
+  double axis_postalign_ms,
+  double total_correction_ms,
   const Eigen::Vector3f& p,
   const Eigen::Quaternionf& q) {
   if (!enable_reg_debug_csv || !reg_debug_csv_stream.is_open()) {
@@ -1269,6 +1356,19 @@ void PoseEstimator::write_reg_debug_row(
                        << inc_stable_ratio << ","
                        << r_inc_static << ","
                        << inc_static_axial_scale << ","
+                       << f2f_filter_ms << ","
+                       << f2f_align_ms << ","
+                       << f2f_total_ms << ","
+                       << map_align_wall_ms << ","
+                       << map_align_cpu_ms << ","
+                       << map_ndt_iterations << ","
+                       << wall_metrics_ms << ","
+                       << inc_static_ms << ","
+                       << map_prior_ms << ","
+                       << fusion_ms << ","
+                       << axis_prealign_ms << ","
+                       << axis_postalign_ms << ","
+                       << total_correction_ms << ","
                        << p.x() << ","
                        << p.y() << ","
                        << p.z() << ","
@@ -1276,7 +1376,6 @@ void PoseEstimator::write_reg_debug_row(
                        << q.x() << ","
                        << q.y() << ","
                        << q.z() << "\n";
-  reg_debug_csv_stream.flush();
 }
 
 double PoseEstimator::score_to_confidence(double score) const {
@@ -1510,6 +1609,7 @@ void PoseEstimator::predict_odom(const Eigen::Matrix4f& odom_delta) {
  */
 // 使用当前点云观测对UKF进行修正，并返回配准后的点云
 pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Time& stamp, const pcl::PointCloud<PointT>::ConstPtr& cloud) {
+  const auto t_correct_begin = std::chrono::steady_clock::now();
   pcl::Registration<PointT, PointT>::Ptr reg;
   {
     std::lock_guard<std::mutex> lk(reg_mtx_);
@@ -1579,13 +1679,19 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   Eigen::Matrix4f map_init_guess = init_guess;
   Eigen::Matrix4f f2f_init_pose = Eigen::Matrix4f::Identity();
   double f2f_init_score = std::numeric_limits<double>::quiet_NaN();
-  const bool has_f2f_init = compute_f2f_absolute_pose(cloud, init_guess, &f2f_init_pose, &f2f_init_score);
+  double f2f_filter_ms = 0.0;
+  double f2f_align_ms = 0.0;
+  double f2f_total_ms = 0.0;
+  const bool has_f2f_init = compute_f2f_absolute_pose(cloud, init_guess, &f2f_init_pose, &f2f_init_score, &f2f_filter_ms, &f2f_align_ms, &f2f_total_ms);
   if (has_f2f_init) {
     map_init_guess = f2f_init_pose;
   }
   const bool use_axis_prealign = enable_axis_prior && (!axis_prealign_only_when_degenerate || last_map_degenerate);
+  double axis_prealign_ms = 0.0;
   if (use_axis_prealign) {
+    const auto t_axis_prealign_begin = std::chrono::steady_clock::now();
     map_init_guess = apply_axis_prior(map_init_guess, "prealign");
+    axis_prealign_ms = elapsed_ms(t_axis_prealign_begin, std::chrono::steady_clock::now());
   }
 
   // 配准对齐点云 cloud 到地图坐标系，使用 map_init_guess 作为初始估计
@@ -1611,10 +1717,13 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
 
   double wall = std::chrono::duration<double, std::milli>(t1w - t0w).count();
   double cpu = t1c - t0c;
-  std::cout << "[REG] wall=" << wall << " ms, cpu=" << cpu << " ms\n";
-  // // solver.iterations()
+  double map_ndt_iterations = std::numeric_limits<double>::quiet_NaN();
+  if (auto ndt_omp = boost::dynamic_pointer_cast<pclomp::NormalDistributionsTransform<PointT, PointT>>(reg)) {
+    map_ndt_iterations = static_cast<double>(ndt_omp->getFinalNumIteration());
+  } else if (auto ndt_cpu = boost::dynamic_pointer_cast<pcl::NormalDistributionsTransform<PointT, PointT>>(reg)) {
+    map_ndt_iterations = static_cast<double>(ndt_cpu->getFinalNumIteration());
+  }
   const bool map_converged = reg->hasConverged();
-  std::cout << " conv=" << map_converged << std::endl;
 
   if (!map_converged) {
     ROS_WARN_STREAM_THROTTLE(1.0, "[REG] map registration did not converge, but still use map observation result");
@@ -1640,16 +1749,22 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   double wall_ratio_inner = 0.0;
   double wall_relief_inner = 0.0;
   double wall_r = 0.0;
+  const auto t_wall_metrics_begin = std::chrono::steady_clock::now();
   compute_wall_observability_metrics(cloud, map_pose, &wall_ratio_inner, &wall_relief_inner, &wall_r);
+  const double wall_metrics_ms = elapsed_ms(t_wall_metrics_begin, std::chrono::steady_clock::now());
   last_wall_r = wall_r;
   const double wall_r_axial_scale = compute_wall_r_axial_scale(wall_r, map_converged, map_fitness_score);
   double inc_unknown_ratio = 0.0;
   double inc_stable_ratio = 0.0;
   double r_inc_static = 0.0;
+  const auto t_inc_static_begin = std::chrono::steady_clock::now();
   compute_inc_static_metrics(cloud, map_pose, &inc_unknown_ratio, &inc_stable_ratio, &r_inc_static);
+  const double inc_static_ms = elapsed_ms(t_inc_static_begin, std::chrono::steady_clock::now());
   last_r_inc_static = r_inc_static;
   const double inc_static_axial_scale = compute_inc_static_axial_scale(r_inc_static);
+  double map_prior_ms = 0.0;
   if (enable_map_prior_layer) {
+    const auto t_map_prior_begin = std::chrono::steady_clock::now();
     map_prior_mult = compute_map_prior_conf_multiplier(
       cloud,
       map_pose,
@@ -1658,11 +1773,13 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
       &map_prior_core_hit_ratio,
       &map_prior_band_hit_ratio,
       &map_prior_inner_hit_ratio);
+    map_prior_ms = elapsed_ms(t_map_prior_begin, std::chrono::steady_clock::now());
   }
   double w_f2f_trans = 0.0;
   double w_f2f_rot = 0.0;
   double w_f2f_axial = 0.0;
   double w_f2f_nonaxial = 0.0;
+  const auto t_fusion_begin = std::chrono::steady_clock::now();
   if (has_f2f_init) {
     selected_pose =
       fuse_map_and_f2f_pose(map_pose, f2f_init_pose, map_converged, map_fitness_score, f2f_init_score, map_prior_mult, &map_conf, &f2f_conf, &w_f2f_trans, &w_f2f_rot, &w_f2f_axial, &w_f2f_nonaxial);
@@ -1670,11 +1787,15 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   } else {
     map_conf = map_conf_raw;
   }
+  const double fusion_ms = elapsed_ms(t_fusion_begin, std::chrono::steady_clock::now());
 
   Eigen::Matrix4f final_pose = selected_pose;
   const bool use_axis_postalign = enable_axis_prior && (!axis_postalign_only_when_degenerate || map_degenerate);
+  double axis_postalign_ms = 0.0;
   if (use_axis_postalign) {
+    const auto t_axis_postalign_begin = std::chrono::steady_clock::now();
     final_pose = apply_axis_prior(selected_pose, map_degenerate ? "postalign_degenerate" : "postalign");
+    axis_postalign_ms = elapsed_ms(t_axis_postalign_begin, std::chrono::steady_clock::now());
   }
   last_map_degenerate = map_degenerate;
   // std::cout << "[TRANSFORM] Current frame pose:" << std::endl;
@@ -1688,20 +1809,7 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
     q.coeffs() *= -1.0f;
   }
 
-  ROS_INFO_STREAM(
-    "[REG] final pose p=[" << p.x() << ", " << p.y() << ", " << p.z() << "] "
-                           << "q=[w " << q.w() << ", x " << q.x() << ", y " << q.y() << ", z " << q.z() << "] "
-                           << "source=" << pose_source << " f2f_init_used=" << (has_f2f_init ? "true" : "false") << " map_converged=" << (map_converged ? "true" : "false")
-                           << " map_score=" << map_fitness_score << " f2f_init_score=" << f2f_init_score << " map_conf_raw=" << map_conf_raw
-                           << " map_conf=" << map_conf << " f2f_conf=" << f2f_conf
-                           << " w_f2f_t=" << w_f2f_trans << " w_f2f_r=" << w_f2f_rot << " w_f2f_ax=" << w_f2f_axial << " w_f2f_nonax=" << w_f2f_nonaxial
-                           << " prior_mult=" << map_prior_mult << " prior_hit_ratio=" << map_prior_hit_ratio << " prior_avg_conf=" << map_prior_avg_conf
-                           << " prior_core_hit_ratio=" << map_prior_core_hit_ratio << " prior_band_hit_ratio=" << map_prior_band_hit_ratio
-                           << " prior_inner_hit_ratio=" << map_prior_inner_hit_ratio
-                           << " wall_ratio_inner=" << wall_ratio_inner << " wall_relief_inner=" << wall_relief_inner << " wall_r=" << wall_r
-                           << " wall_r_axial_scale=" << wall_r_axial_scale
-                           << " inc_unknown_ratio=" << inc_unknown_ratio << " inc_stable_ratio=" << inc_stable_ratio
-                           << " r_inc_static=" << r_inc_static << " inc_static_axial_scale=" << inc_static_axial_scale);
+  const double total_correction_ms = elapsed_ms(t_correct_begin, std::chrono::steady_clock::now());
   write_reg_debug_row(
     stamp,
     pose_source,
@@ -1731,6 +1839,19 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
     inc_stable_ratio,
     r_inc_static,
     inc_static_axial_scale,
+    f2f_filter_ms,
+    f2f_align_ms,
+    f2f_total_ms,
+    wall,
+    cpu,
+    map_ndt_iterations,
+    wall_metrics_ms,
+    inc_static_ms,
+    map_prior_ms,
+    fusion_ms,
+    axis_prealign_ms,
+    axis_postalign_ms,
+    total_correction_ms,
     p,
     q);
 

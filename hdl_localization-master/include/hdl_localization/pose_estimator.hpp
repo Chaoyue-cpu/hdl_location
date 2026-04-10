@@ -164,7 +164,14 @@ public:
 private:
   bool is_wall_point(const PointT& pt) const;
   bool keep_point_by_ratio(const PointT& pt, double keep_ratio, int salt) const;
-  bool compute_f2f_absolute_pose(const pcl::PointCloud<PointT>::ConstPtr& cloud, const Eigen::Matrix4f& init_guess, Eigen::Matrix4f* f2f_absolute_pose, double* f2f_fitness_score);
+  bool compute_f2f_absolute_pose(
+    const pcl::PointCloud<PointT>::ConstPtr& cloud,
+    const Eigen::Matrix4f& init_guess,
+    Eigen::Matrix4f* f2f_absolute_pose,
+    double* f2f_fitness_score,
+    double* f2f_filter_ms = nullptr,
+    double* f2f_align_ms = nullptr,
+    double* f2f_total_ms = nullptr);
   Eigen::Matrix4f fuse_map_and_f2f_pose(
     const Eigen::Matrix4f& map_pose,
     const Eigen::Matrix4f& f2f_pose,
@@ -237,6 +244,19 @@ private:
     double inc_stable_ratio,
     double r_inc_static,
     double inc_static_axial_scale,
+    double f2f_filter_ms,
+    double f2f_align_ms,
+    double f2f_total_ms,
+    double map_align_wall_ms,
+    double map_align_cpu_ms,
+    double map_ndt_iterations,
+    double wall_metrics_ms,
+    double inc_static_ms,
+    double map_prior_ms,
+    double fusion_ms,
+    double axis_prealign_ms,
+    double axis_postalign_ms,
+    double total_correction_ms,
     const Eigen::Vector3f& p,
     const Eigen::Quaternionf& q);
 
