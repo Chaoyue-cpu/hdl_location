@@ -5,6 +5,7 @@
 #include <chrono>
 #include <iomanip>
 #include <cerrno>
+#include <cmath>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -102,6 +103,31 @@ bool ensure_parent_dir_for_file(const std::string& file_path) {
   }
   return ensure_directory_exists(file_path.substr(0, slash));
 }
+
+std::string dirname_from_path(const std::string& file_path) {
+  const std::size_t slash = file_path.find_last_of('/');
+  if (slash == std::string::npos) {
+    return std::string("");
+  }
+  return file_path.substr(0, slash);
+}
+
+double elapsed_ms(const std::chrono::steady_clock::time_point& begin, const std::chrono::steady_clock::time_point& end) {
+  return std::chrono::duration<double, std::milli>(end - begin).count();
+}
+
+double percentile_ms(std::vector<double> samples, double percentile) {
+  if (samples.empty()) {
+    return 0.0;
+  }
+  std::sort(samples.begin(), samples.end());
+  const double clamped = std::min(std::max(percentile, 0.0), 100.0);
+  const double rank = (clamped / 100.0) * static_cast<double>(samples.size() - 1);
+  const std::size_t idx = static_cast<std::size_t>(std::floor(rank));
+  const std::size_t idx_next = std::min(idx + 1, samples.size() - 1);
+  const double frac = rank - static_cast<double>(idx);
+  return samples[idx] + (samples[idx_next] - samples[idx]) * frac;
+}
 }  // namespace
 
 class HdlLocalizationNodelet : public nodelet::Nodelet {
@@ -130,6 +156,12 @@ public:
       tile_timing_csv_stream_.close();
     }
 
+    write_timing_summary();
+    if (frame_timing_csv_stream_.is_open()) {
+      frame_timing_csv_stream_.flush();
+      frame_timing_csv_stream_.close();
+    }
+
     NODELET_INFO("Nodelet cleanup completed");
   }
 
@@ -140,6 +172,7 @@ public:
 
     initialize_params();
     init_tile_timing_csv();
+    init_frame_timing_csv();
 
     robot_odom_frame_id = private_nh.param<std::string>("robot_odom_frame_id", "robot_odom");
     odom_child_frame_id = private_nh.param<std::string>("odom_child_frame_id", "base_link");
@@ -256,6 +289,8 @@ public:
     } else {
       NODELET_WARN("Pose estimator not initialized yet, will update tiles after first scan");
     }
+
+    dump_experiment_config();
   }
 
 private:
@@ -350,7 +385,7 @@ private:
       // std::cout << "registration: FAST_GICP" << std::endl;
 
       fast_gicp::FastGICP<PointT, PointT>::Ptr fast_gicp(new fast_gicp::FastGICP<PointT, PointT>());
-      fast_gicp->setNumThreads(6);
+      fast_gicp->setNumThreads(9);
       // fast_gicp->setTransformationEpsilon(0.0001);   // 若两次估计间差异小于0.0001，则认为已收敛
       fast_gicp->setTransformationEpsilon(0.001);
       fast_gicp->setMaximumIterations(64);  // 最大迭代次数
@@ -552,8 +587,49 @@ private:
     NODELET_INFO_STREAM("tile timing csv enabled: " << tile_timing_csv_path_);
   }
 
-  void log_tile_timing_event(const ros::Time& stamp, const std::string& event, std::size_t tile_count, double prep_ms, double request_to_apply_ms, const std::string& extra,
-                             const std::vector<std::string>& tiles) {
+  void init_frame_timing_csv() {
+    frame_timing_csv_enabled_ = private_nh.param<bool>("enable_frame_timing_csv", true);
+    frame_timing_csv_path_ = private_nh.param<std::string>("frame_timing_csv_path", std::string(""));
+
+    if (!frame_timing_csv_enabled_) {
+      return;
+    }
+
+    if (frame_timing_csv_path_.empty()) {
+      const std::string reg_debug_csv_path = private_nh.param<std::string>("reg_debug_csv_path", std::string(""));
+      if (!reg_debug_csv_path.empty()) {
+        const std::string log_dir = dirname_from_path(reg_debug_csv_path);
+        frame_timing_csv_path_ = log_dir.empty() ? "frame_timing_metrics.csv" : (log_dir + "/frame_timing_metrics.csv");
+      } else {
+        frame_timing_csv_path_ = "/tmp/frame_timing_metrics.csv";
+      }
+    }
+
+    if (!ensure_parent_dir_for_file(frame_timing_csv_path_)) {
+      frame_timing_csv_enabled_ = false;
+      NODELET_WARN_STREAM("frame timing csv disabled: failed to create parent directory for path: " << frame_timing_csv_path_);
+      return;
+    }
+
+    frame_timing_csv_stream_.open(frame_timing_csv_path_, std::ios::out | std::ios::trunc);
+    if (!frame_timing_csv_stream_.is_open()) {
+      frame_timing_csv_enabled_ = false;
+      NODELET_WARN_STREAM("frame timing csv disabled: failed to open path: " << frame_timing_csv_path_);
+      return;
+    }
+
+    frame_timing_csv_stream_ << "stamp,is_map_switch,end_to_end_ms,map_align_cpu_ms,total_correction_ms,map_prep_ms,request_to_apply_ms\n";
+    NODELET_INFO_STREAM("frame timing csv enabled: " << frame_timing_csv_path_);
+  }
+
+  void log_tile_timing_event(
+    const ros::Time& stamp,
+    const std::string& event,
+    std::size_t tile_count,
+    double prep_ms,
+    double request_to_apply_ms,
+    const std::string& extra,
+    const std::vector<std::string>& tiles) {
     if (!tile_timing_csv_enabled_ || !tile_timing_csv_stream_.is_open()) {
       return;
     }
@@ -565,8 +641,72 @@ private:
     }
 
     std::lock_guard<std::mutex> lock(tile_timing_csv_mutex_);
-    tile_timing_csv_stream_ << std::fixed << std::setprecision(9) << stamp.toSec() << "," << event << "," << tile_count << "," << prep_ms << "," << request_to_apply_ms
-                            << "," << extra << "," << joined_tiles.str() << "\n";
+    tile_timing_csv_stream_ << std::fixed << std::setprecision(9) << stamp.toSec() << "," << event << "," << tile_count << "," << prep_ms << "," << request_to_apply_ms << ","
+                            << extra << "," << joined_tiles.str() << "\n";
+  }
+
+  void log_frame_timing(
+    const ros::Time& stamp,
+    bool is_map_switch,
+    double end_to_end_ms,
+    double map_align_cpu_ms,
+    double total_correction_ms,
+    double map_prep_ms,
+    double request_to_apply_ms) {
+    if (!frame_timing_csv_enabled_ || !frame_timing_csv_stream_.is_open()) {
+      return;
+    }
+
+    std::lock_guard<std::mutex> lock(frame_timing_csv_mutex_);
+    frame_timing_csv_stream_ << std::fixed << std::setprecision(9) << stamp.toSec() << ","
+                             << (is_map_switch ? 1 : 0) << ","
+                             << end_to_end_ms << ","
+                             << map_align_cpu_ms << ","
+                             << total_correction_ms << ","
+                             << map_prep_ms << ","
+                             << request_to_apply_ms << "\n";
+  }
+
+  void write_timing_summary() {
+    if (!frame_timing_csv_enabled_) {
+      return;
+    }
+
+    const std::string log_dir = dirname_from_path(frame_timing_csv_path_);
+    const std::string summary_path = log_dir.empty() ? "timing_summary.txt" : (log_dir + "/timing_summary.txt");
+    if (!ensure_parent_dir_for_file(summary_path)) {
+      NODELET_WARN_STREAM("timing summary disabled: failed to create parent directory for path: " << summary_path);
+      return;
+    }
+
+    std::ofstream ofs(summary_path, std::ios::out | std::ios::trunc);
+    if (!ofs.is_open()) {
+      NODELET_WARN_STREAM("timing summary disabled: failed to open path: " << summary_path);
+      return;
+    }
+
+    auto avg_of = [](const std::vector<double>& v) -> double {
+      if (v.empty()) {
+        return 0.0;
+      }
+      double sum = 0.0;
+      for (double x : v) {
+        sum += x;
+      }
+      return sum / static_cast<double>(v.size());
+    };
+
+    const double end_to_end_avg = avg_of(end_to_end_ms_samples_);
+    const double end_to_end_p95 = percentile_ms(end_to_end_ms_samples_, 95.0);
+    const double non_switch_map_align_avg = avg_of(non_switch_map_align_ms_samples_);
+    const double map_prep_avg = avg_of(map_prep_ms_samples_);
+
+    ofs << "end_to_end_avg_ms=" << std::fixed << std::setprecision(6) << end_to_end_avg << "\n";
+    ofs << "end_to_end_p95_ms=" << std::fixed << std::setprecision(6) << end_to_end_p95 << "\n";
+    ofs << "non_switch_map_align_avg_ms=" << std::fixed << std::setprecision(6) << non_switch_map_align_avg << "\n";
+    ofs << "map_switch_prep_avg_ms=" << std::fixed << std::setprecision(6) << map_prep_avg << "\n";
+    ofs.flush();
+    NODELET_INFO_STREAM("timing summary saved to: " << summary_path);
   }
 
   ros::Time resolve_log_stamp(const ros::Time& preferred) const {
@@ -574,6 +714,124 @@ private:
       return preferred;
     }
     return ros::Time::now();
+  }
+
+  void dump_experiment_config() {
+    std::string config_path = private_nh.param<std::string>("experiment_config_path", std::string(""));
+    if (config_path.empty()) {
+      const std::string reg_debug_csv_path = private_nh.param<std::string>("reg_debug_csv_path", std::string(""));
+      if (!reg_debug_csv_path.empty()) {
+        const std::string log_dir = dirname_from_path(reg_debug_csv_path);
+        config_path = log_dir.empty() ? "experiment_config.txt" : (log_dir + "/experiment_config.txt");
+      } else {
+        config_path = "/tmp/experiment_config.txt";
+      }
+    }
+
+    if (!ensure_parent_dir_for_file(config_path)) {
+      NODELET_WARN_STREAM("failed to create parent directory for experiment config: " << config_path);
+      return;
+    }
+
+    std::ofstream ofs(config_path, std::ios::out | std::ios::trunc);
+    if (!ofs.is_open()) {
+      NODELET_WARN_STREAM("failed to open experiment config path: " << config_path);
+      return;
+    }
+
+    auto write_string = [&](const std::string& key, const std::string& value) { ofs << key << "=" << value << "\n"; };
+    auto write_bool = [&](const std::string& key, bool value) { ofs << key << "=" << (value ? "true" : "false") << "\n"; };
+    auto write_int = [&](const std::string& key, int value) { ofs << key << "=" << value << "\n"; };
+    auto write_double = [&](const std::string& key, double value) { ofs << std::fixed << std::setprecision(6) << key << "=" << value << "\n"; };
+
+    ofs << "# Experiment configuration snapshot\n";
+    write_string("metadata_file", private_nh.param<std::string>("metadata_file", std::string("")));
+    write_string("reg_debug_csv_path", private_nh.param<std::string>("reg_debug_csv_path", std::string("")));
+    write_string("tile_timing_csv_path", private_nh.param<std::string>("tile_timing_csv_path", std::string("")));
+    write_string("odom_child_frame_id", private_nh.param<std::string>("odom_child_frame_id", std::string("base_link")));
+    write_string("robot_odom_frame_id", private_nh.param<std::string>("robot_odom_frame_id", std::string("odom")));
+    write_string("reg_method", private_nh.param<std::string>("reg_method", std::string("NDT_OMP")));
+    write_string("frame2frame_reg_method", private_nh.param<std::string>("frame2frame_reg_method", std::string("FAST_GICP")));
+    write_string("ndt_neighbor_search_method", private_nh.param<std::string>("ndt_neighbor_search_method", std::string("KDTREE")));
+    write_string("map_prior_csv", private_nh.param<std::string>("map_prior_csv", std::string("")));
+    write_string("inc_static_reference_csv", private_nh.param<std::string>("inc_static_reference_csv", std::string("")));
+
+    write_bool("use_imu", private_nh.param<bool>("use_imu", false));
+    write_bool("use_global_localization", private_nh.param<bool>("use_global_localization", false));
+    write_bool("enable_frame2frame_ndt", private_nh.param<bool>("enable_frame2frame_ndt", false));
+    write_bool("enable_score_weighted_fusion", private_nh.param<bool>("enable_score_weighted_fusion", false));
+    write_bool("enable_axis_anisotropic_fusion", private_nh.param<bool>("enable_axis_anisotropic_fusion", false));
+    write_bool("enable_wall_r_axial_adaptation", private_nh.param<bool>("enable_wall_r_axial_adaptation", false));
+    write_bool("enable_inc_static_axial_adaptation", private_nh.param<bool>("enable_inc_static_axial_adaptation", false));
+    write_bool("enable_f2f_confidence_filter", private_nh.param<bool>("enable_f2f_confidence_filter", false));
+    write_bool("enable_f2f_dynamic_filter", private_nh.param<bool>("enable_f2f_dynamic_filter", false));
+    write_bool("enable_map_prior_layer", private_nh.param<bool>("enable_map_prior_layer", false));
+    write_bool("enable_map_prior_nonaxial_adaptation", private_nh.param<bool>("enable_map_prior_nonaxial_adaptation", false));
+    write_bool("enable_reg_debug_csv", private_nh.param<bool>("enable_reg_debug_csv", false));
+    write_bool("enable_tile_timing_csv", private_nh.param<bool>("enable_tile_timing_csv", false));
+    write_bool("specify_init_pose", private_nh.param<bool>("specify_init_pose", false));
+
+    write_int("tile_radius", private_nh.param<int>("tile_radius", 1));
+    write_int("tile_hysteresis_count", private_nh.param<int>("tile_hysteresis_count", 3));
+    write_int("tile_count_from_metadata", static_cast<int>(tile_map.size()));
+    write_int("ndt_num_threads", private_nh.param<int>("ndt_num_threads", 1));
+    write_int("ndt_max_iterations", private_nh.param<int>("ndt_max_iterations", 1));
+    write_int("frame_to_frame_reg_num_threads", private_nh.param<int>("frame_to_frame_reg_num_threads", 1));
+    write_int("inc_static_window_size", private_nh.param<int>("inc_static_window_size", 0));
+    write_int("inc_static_min_hits", private_nh.param<int>("inc_static_min_hits", 0));
+    write_int("inc_static_sample_step", private_nh.param<int>("inc_static_sample_step", 0));
+    write_int("inc_static_min_unknown_voxels", private_nh.param<int>("inc_static_min_unknown_voxels", 0));
+    write_int("map_prior_sample_step", private_nh.param<int>("map_prior_sample_step", 0));
+    write_int("map_prior_min_hits", private_nh.param<int>("map_prior_min_hits", 0));
+    write_int("f2f_min_filtered_points", private_nh.param<int>("f2f_min_filtered_points", 0));
+
+    write_double("x_resolution", x_res);
+    write_double("y_resolution", y_res);
+    write_double("tile_update_min_dist", private_nh.param<double>("tile_update_min_dist", 0.5));
+    write_double("downsample_resolution", private_nh.param<double>("downsample_resolution", 0.1));
+    write_double("time_offset_lidar_to_imu", private_nh.param<double>("time_offset_lidar_to_imu", 0.0));
+    write_double("ndt_neighbor_search_radius", private_nh.param<double>("ndt_neighbor_search_radius", 2.0));
+    write_double("ndt_resolution", private_nh.param<double>("ndt_resolution", 1.0));
+    write_double("ndt_transformation_epsilon", private_nh.param<double>("ndt_transformation_epsilon", 1e-3));
+    write_double("ndt_step_size", private_nh.param<double>("ndt_step_size", 0.1));
+    write_double("ndt_outlier_ratio", private_nh.param<double>("ndt_outlier_ratio", 0.55));
+    write_double("ndt_score_good", private_nh.param<double>("ndt_score_good", 0.15));
+    write_double("ndt_score_bad", private_nh.param<double>("ndt_score_bad", 1.5));
+    write_double("ndt_score_min_confidence", private_nh.param<double>("ndt_score_min_confidence", 0.05));
+    write_double("f2f_score_confidence_gain", private_nh.param<double>("f2f_score_confidence_gain", 0.0));
+    write_double("f2f_axial_conf_gain", private_nh.param<double>("f2f_axial_conf_gain", 1.0));
+    write_double("f2f_nonaxial_conf_gain", private_nh.param<double>("f2f_nonaxial_conf_gain", 1.0));
+    write_double("map_axial_conf_gain", private_nh.param<double>("map_axial_conf_gain", 1.0));
+    write_double("map_nonaxial_conf_gain", private_nh.param<double>("map_nonaxial_conf_gain", 1.0));
+    write_double("wall_r_axial_beta", private_nh.param<double>("wall_r_axial_beta", 1.0));
+    write_double("wall_r_axial_scale_min", private_nh.param<double>("wall_r_axial_scale_min", 1.0));
+    write_double("wall_r_axial_scale_max", private_nh.param<double>("wall_r_axial_scale_max", 1.0));
+    write_double("inc_static_beta", private_nh.param<double>("inc_static_beta", 1.0));
+    write_double("inc_static_r_deadzone", private_nh.param<double>("inc_static_r_deadzone", 0.0));
+    write_double("inc_static_scale_min", private_nh.param<double>("inc_static_scale_min", 1.0));
+    write_double("inc_static_scale_max", private_nh.param<double>("inc_static_scale_max", 1.0));
+    write_double("f2f_wall_y_threshold", private_nh.param<double>("f2f_wall_y_threshold", 0.0));
+    write_double("f2f_wall_z_min", private_nh.param<double>("f2f_wall_z_min", 0.0));
+    write_double("f2f_wall_z_max", private_nh.param<double>("f2f_wall_z_max", 0.0));
+    write_double("f2f_wall_keep_ratio", private_nh.param<double>("f2f_wall_keep_ratio", 0.0));
+    write_double("f2f_dynamic_voxel_size", private_nh.param<double>("f2f_dynamic_voxel_size", 0.0));
+    write_double("f2f_dynamic_keep_ratio", private_nh.param<double>("f2f_dynamic_keep_ratio", 0.0));
+    write_double("map_prior_voxel_size", private_nh.param<double>("map_prior_voxel_size", 0.0));
+    write_double("map_prior_core_gain", private_nh.param<double>("map_prior_core_gain", 0.0));
+    write_double("map_prior_band_gain", private_nh.param<double>("map_prior_band_gain", 0.0));
+    write_double("map_prior_inner_gain", private_nh.param<double>("map_prior_inner_gain", 0.0));
+    write_double("map_prior_uncertain_gain", private_nh.param<double>("map_prior_uncertain_gain", 0.0));
+    write_double("map_prior_conf_floor", private_nh.param<double>("map_prior_conf_floor", 0.0));
+    write_double("init_pos_x", private_nh.param<double>("init_pos_x", 0.0));
+    write_double("init_pos_y", private_nh.param<double>("init_pos_y", 0.0));
+    write_double("init_pos_z", private_nh.param<double>("init_pos_z", 0.0));
+    write_double("init_ori_w", private_nh.param<double>("init_ori_w", 1.0));
+    write_double("init_ori_x", private_nh.param<double>("init_ori_x", 0.0));
+    write_double("init_ori_y", private_nh.param<double>("init_ori_y", 0.0));
+    write_double("init_ori_z", private_nh.param<double>("init_ori_z", 0.0));
+
+    ofs.flush();
+    NODELET_INFO_STREAM("experiment config saved to: " << config_path);
   }
 
 private:
@@ -591,6 +849,11 @@ private:
    * @param points_msg
    */
   void points_callback(const sensor_msgs::PointCloud2ConstPtr& points_msg) {
+    const auto frame_begin = std::chrono::steady_clock::now();
+    bool applied_tile_update = false;
+    double applied_map_prep_ms = 0.0;
+    double request_to_apply_ms = 0.0;
+
     if (has_prepared_.load(std::memory_order_acquire)) {
       pcl::Registration<PointT, PointT>::Ptr reg;
       ros::Time prepared_stamp;
@@ -606,11 +869,19 @@ private:
       }
       if (reg && pose_estimator) {
         pose_estimator->set_registration(reg);  // 内部只短暂锁一下
-        double request_to_apply_ms = 0.0;
         if (last_tile_request_tp_valid_) {
           request_to_apply_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - last_tile_request_tp_).count();
         }
-        log_tile_timing_event(resolve_log_stamp(points_msg->header.stamp), "apply_registration", prepared_tiles.size(), prepared_prep_ms, request_to_apply_ms, "map_swap", prepared_tiles);
+        applied_tile_update = true;
+        applied_map_prep_ms = prepared_prep_ms;
+        log_tile_timing_event(
+          resolve_log_stamp(points_msg->header.stamp),
+          "apply_registration",
+          prepared_tiles.size(),
+          prepared_prep_ms,
+          request_to_apply_ms,
+          "map_swap",
+          prepared_tiles);
       }
     }
 
@@ -749,6 +1020,24 @@ private:
     }
     // // 发布里程计
     publish_odometry(points_msg->header.stamp, pose_estimator->matrix());
+
+    const double map_align_cpu_ms = pose_estimator ? pose_estimator->get_last_map_align_cpu_ms() : 0.0;
+    const double total_correction_ms = pose_estimator ? pose_estimator->get_last_total_correction_ms() : 0.0;
+    const double end_to_end_ms = elapsed_ms(frame_begin, std::chrono::steady_clock::now());
+    log_frame_timing(points_msg->header.stamp, applied_tile_update, end_to_end_ms, map_align_cpu_ms, total_correction_ms, applied_map_prep_ms, request_to_apply_ms);
+    {
+      std::lock_guard<std::mutex> lock(frame_timing_csv_mutex_);
+      end_to_end_ms_samples_.push_back(end_to_end_ms);
+      if (applied_tile_update) {
+        if (applied_map_prep_ms > 0.0) {
+          map_prep_ms_samples_.push_back(applied_map_prep_ms);
+        }
+      } else {
+        if (map_align_cpu_ms > 0.0) {
+          non_switch_map_align_ms_samples_.push_back(map_align_cpu_ms);
+        }
+      }
+    }
   }
 
   void updateDynamicTiles(const Eigen::Vector3f& position) {
@@ -939,7 +1228,14 @@ private:
     if (last_tile_request_tp_valid_) {
       request_to_ready_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - last_tile_request_tp_).count();
     }
-    log_tile_timing_event(resolve_log_stamp(msg->header.stamp), "prepared_registration", last_requested_tiles_.size(), prep_ms, request_to_ready_ms, "map_ready", last_requested_tiles_);
+    log_tile_timing_event(
+      resolve_log_stamp(msg->header.stamp),
+      "prepared_registration",
+      last_requested_tiles_.size(),
+      prep_ms,
+      request_to_ready_ms,
+      "map_ready",
+      last_requested_tiles_);
 
     // 3) 放到 prepared 槽位（覆盖旧的 prepared，不会累积）
     {
@@ -1442,6 +1738,14 @@ private:
   std::string tile_timing_csv_path_;
   std::ofstream tile_timing_csv_stream_;
   std::mutex tile_timing_csv_mutex_;
+
+  bool frame_timing_csv_enabled_ = false;
+  std::string frame_timing_csv_path_;
+  std::ofstream frame_timing_csv_stream_;
+  std::mutex frame_timing_csv_mutex_;
+  std::vector<double> end_to_end_ms_samples_;
+  std::vector<double> non_switch_map_align_ms_samples_;
+  std::vector<double> map_prep_ms_samples_;
 };
 }  // namespace hdl_localization
 

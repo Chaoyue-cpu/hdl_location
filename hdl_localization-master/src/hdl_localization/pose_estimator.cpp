@@ -1810,6 +1810,8 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   }
 
   const double total_correction_ms = elapsed_ms(t_correct_begin, std::chrono::steady_clock::now());
+  last_map_align_cpu_ms = cpu;
+  last_total_correction_ms = total_correction_ms;
   write_reg_debug_row(
     stamp,
     pose_source,

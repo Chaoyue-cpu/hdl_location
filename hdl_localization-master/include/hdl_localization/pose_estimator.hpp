@@ -114,6 +114,9 @@ public:
     const std::string& reg_debug_csv_path = "");
   ~PoseEstimator();
 
+  double get_last_map_align_cpu_ms() const { return last_map_align_cpu_ms; }
+  double get_last_total_correction_ms() const { return last_total_correction_ms; }
+
   /**
    * @brief predict
    * @param stamp    timestamp
@@ -386,6 +389,8 @@ private:
   std::uint64_t reg_debug_seq;
   double last_wall_r;
   double last_r_inc_static;
+  double last_map_align_cpu_ms = 0.0;
+  double last_total_correction_ms = 0.0;
   std::deque<std::vector<PriorKey>> inc_static_unknown_history;
   std::unordered_map<PriorKey, int, PriorKeyHash> inc_static_unknown_hit_counts;
   mutable std::mutex reg_debug_csv_mutex;

@@ -1,6 +1,10 @@
 #include <mutex>
 #include <memory>
 #include <iostream>
+#include <iomanip>
+#include <cerrno>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include <ros/ros.h>
 #include <pcl_ros/point_cloud.h>
@@ -24,12 +28,54 @@
 
 namespace hdl_localization {
 
+namespace {
+bool ensure_directory_exists(const std::string& dir_path) {
+  if (dir_path.empty()) {
+    return true;
+  }
+
+  std::string current;
+  if (dir_path.front() == '/') {
+    current = "/";
+  }
+
+  std::stringstream ss(dir_path);
+  std::string part;
+  while (std::getline(ss, part, '/')) {
+    if (part.empty()) {
+      continue;
+    }
+    if (!current.empty() && current.back() != '/') {
+      current += "/";
+    }
+    current += part;
+    if (::mkdir(current.c_str(), 0755) != 0 && errno != EEXIST) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ensure_parent_dir_for_file(const std::string& file_path) {
+  const std::size_t slash = file_path.find_last_of('/');
+  if (slash == std::string::npos) {
+    return true;
+  }
+  return ensure_directory_exists(file_path.substr(0, slash));
+}
+}  // namespace
+
 class GlobalmapServerNodelet : public nodelet::Nodelet {
 public:
   using PointT = pcl::PointXYZI;
 
   GlobalmapServerNodelet() {}
-  virtual ~GlobalmapServerNodelet() {}
+  virtual ~GlobalmapServerNodelet() {
+    if (tile_loading_csv_stream_.is_open()) {
+      tile_loading_csv_stream_.flush();
+      tile_loading_csv_stream_.close();
+    }
+  }
 
   void onInit() override {
     nh = getNodeHandle();
@@ -43,6 +89,7 @@ public:
 
     // 动态地图
     map_update_sub = nh.subscribe("/map_request/pcd", 10, &GlobalmapServerNodelet::map_update_callback, this);
+    init_tile_loading_csv();
 
     // globalmap_pub_timer = nh.createWallTimer(ros::WallDuration(1.0), &GlobalmapServerNodelet::pub_once_cb, this, true, true);
 
@@ -113,6 +160,49 @@ private:
 
   void pub_once_cb(const ros::WallTimerEvent& event) { globalmap_pub.publish(globalmap); }
 
+  void init_tile_loading_csv() {
+    tile_loading_csv_enabled_ = private_nh.param<bool>("enable_tile_loading_csv", true);
+    tile_loading_csv_path_ = private_nh.param<std::string>("tile_loading_csv_path", std::string(""));
+    if (!tile_loading_csv_enabled_) {
+      return;
+    }
+
+    if (tile_loading_csv_path_.empty()) {
+      tile_loading_csv_path_ = "/tmp/tile_server_loading_metrics.csv";
+    }
+
+    if (!ensure_parent_dir_for_file(tile_loading_csv_path_)) {
+      tile_loading_csv_enabled_ = false;
+      NODELET_WARN_STREAM("tile loading csv disabled: failed to create parent directory for path: " << tile_loading_csv_path_);
+      return;
+    }
+
+    tile_loading_csv_stream_.open(tile_loading_csv_path_, std::ios::out | std::ios::trunc);
+    if (!tile_loading_csv_stream_.is_open()) {
+      tile_loading_csv_enabled_ = false;
+      NODELET_WARN_STREAM("tile loading csv disabled: failed to open path: " << tile_loading_csv_path_);
+      return;
+    }
+
+    tile_loading_csv_stream_ << "stamp,tile_count,load_ms,merged_points,tiles\n";
+    NODELET_INFO_STREAM("tile loading csv enabled: " << tile_loading_csv_path_);
+  }
+
+  void log_tile_loading_event(const ros::Time& stamp, std::size_t tile_count, double load_ms, std::size_t merged_points, const std::vector<std::string>& tiles) {
+    if (!tile_loading_csv_enabled_ || !tile_loading_csv_stream_.is_open()) {
+      return;
+    }
+
+    std::ostringstream joined_tiles;
+    for (std::size_t i = 0; i < tiles.size(); ++i) {
+      if (i) joined_tiles << "|";
+      joined_tiles << tiles[i];
+    }
+
+    tile_loading_csv_stream_ << std::fixed << std::setprecision(9) << stamp.toSec() << "," << tile_count << "," << load_ms << "," << merged_points << "," << joined_tiles.str() << "\n";
+    tile_loading_csv_stream_.flush();
+  }
+
   // void map_update_callback(const std_msgs::String& msg) {
   //   ROS_INFO_STREAM("Received map request, map path : " << msg.data);
   //   std::string globalmap_pcd = msg.data;
@@ -136,6 +226,7 @@ private:
   // 地图加载
   void load_tiles(const std::vector<std::string>& tiles) {
     pcl::PointCloud<PointT>::Ptr merged(new pcl::PointCloud<PointT>());
+    const auto t0 = std::chrono::steady_clock::now();
 
     for (const auto& name : tiles) {
       std::string path = tile_dir + "/" + name;
@@ -166,6 +257,9 @@ private:
 
     globalmap = merged;
     globalmap_pub.publish(globalmap);
+    const auto t1 = std::chrono::steady_clock::now();
+    const double load_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    log_tile_loading_event(ros::Time::now(), tiles.size(), load_ms, merged->size(), tiles);
     NODELET_INFO_STREAM("globalmap loaded in globalmap_noderet");
   }
 
@@ -205,6 +299,9 @@ private:
   double x_res, y_res;
 
   std::vector<std::string> current_tiles;
+  bool tile_loading_csv_enabled_ = false;
+  std::string tile_loading_csv_path_;
+  std::ofstream tile_loading_csv_stream_;
 };
 
 }  // namespace hdl_localization

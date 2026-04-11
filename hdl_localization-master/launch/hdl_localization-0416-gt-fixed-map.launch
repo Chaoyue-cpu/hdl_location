@@ -1,6 +1,7 @@
 <?xml version="1.0"?>
 <launch>
   <!-- arguments -->
+  <!-- 加载整个地图，用于和单个地图做实验 -->
   <arg name="nodelet_manager" default="$(anon hdl_localization_nodelet_manager)" />
   <arg name="points_topic" default="/perception/lidar_up_pointcloud" />
   <!-- input clouds are transformed in odom_child_frame, and then localization is performed in that frame -->
@@ -77,7 +78,7 @@
   <arg name="inc_static_reference_voxel_size_arg" default="2.0" />
   
 
-  <arg name="log_output_dir" default="/media/scy/新加卷/毕业论文/实验数据/动态地图实验/E0_default_run" />
+  <arg name="log_output_dir" default="/media/scy/新加卷/毕业论文/实验数据/动态地图实验/E1_default_run" />
   <arg name="enable_reg_debug_csv" default="true" />
   <!-- 主线程定位耗时指标 + 定位状态指标 -->
   <arg name="reg_debug_csv_path" default="$(arg log_output_dir)/main_thread_localization_metrics.csv" />
@@ -147,8 +148,8 @@
 <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/DLO_half_keyframe11_0.05resolution.pcd" /> -->
 
 <param name="globalmap_pcd" value="/media/scy/新加卷/数据集/locus多个地下矿井/真值/_ground_truth-20250124T153559Z-001/_ground_truth/D_Tunnel_Husky4_gt/h4_sr2_gt_map.pcd" />
-<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/公司地图更大切块/pointcloud_map_metadata.yaml" />
-<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/公司地图更大切块/pointcloud_map.pcd" />    
+<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/公司地图/pointcloud_map_metadata.yaml" />
+<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/公司地图/pointcloud_map.pcd" />    
       <param name="convert_utm_to_local" value="true" />
       <param name="enable_tile_loading_csv" value="$(arg enable_tile_loading_csv)" />
       <param name="tile_loading_csv_path" value="$(arg tile_loading_csv_path)" />
@@ -161,8 +162,8 @@
     <!-- hdl_localization_nodelet -->
     <node pkg="nodelet" type="nodelet" name="hdl_localization_nodelet" args="load hdl_localization/HdlLocalizationNodelet $(arg nodelet_manager)">
      <!-- 地图参数 -->
-      <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/公司地图更大切块/pointcloud_map_metadata.yaml" />
-      <param name="tile_radius" value="1" />   <!-- 1=3x3, 2=5x5 -->
+      <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/公司地图/pointcloud_map_metadata.yaml" />
+      <param name="tile_radius" value="20" />   <!-- 1=3x3, 2=5x5 -->
 <param name="time_offset_lidar_to_imu" value="0.0" />
 
       <remap from="/velodyne_points" to="$(arg points_topic)" />
