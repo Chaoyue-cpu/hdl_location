@@ -1,29 +1,118 @@
 <?xml version="1.0"?>
 <launch>
-  <!-- arguments -->
+  <!-- 使用优化的地图，来进行本文方法定位 -->
   <arg name="nodelet_manager" default="$(anon hdl_localization_nodelet_manager)" />
   <arg name="points_topic" default="/perception/lidar_up_pointcloud" />
   <!-- input clouds are transformed in odom_child_frame, and then localization is performed in that frame -->
   <!-- this is useful to match the LIDAR and IMU coodinate systems -->
   <!-- <arg name="odom_child_frame_id" default="imu_link" /> -->
     <arg name="odom_child_frame_id" default="base_link" />
-
     <!-- 车辆大小信息，高度在1.88-1.92之间，x在-0.91到2.12之间，y在-0.72到0.69之间。 -->
 
-  <!-- optional arguments，不用imu时除了use_global_localization全false -->
-  <arg name="use_imu" default="true" />
+
+  <!-- ndt不用imu，gicp建议用，optional arguments，不用imu时除了use_global_localization全false， -->
+  <arg name="use_imu" default="false" />
   <arg name="invert_imu_acc" default="false" />
   <arg name="invert_imu_gyro" default="false" />
   <arg name="use_global_localization" default="false" />
   <arg name="imu_topic" default="/localization/imu" />
-  <arg name="enable_frame2frame_ndt" default="false" />
-  <!-- NDT_OMP -->
+  <!-- 当前代码中的 map/f2f 融合逻辑：
+       1) 先做帧到地图配准，得到 map_pose 与 map_score；
+       2) 若 enable_frame2frame_ndt=true，则再做帧间配准，得到 f2f_absolute_pose 作为额外观测；
+       3) 若有 f2f 结果，则进入 map-f2f 融合；若没有，则直接使用 map_pose；
+       4) 若 f2f_score_confidence_gain=0，则 f2f 只作为初值/参考，不参与最终权重；
+       5) 若 enable_axis_anisotropic_fusion=true，则平移会拆成 axial / nonaxial 两个方向分别融合；
+       6) wall_r 只调 map 侧 axial，inc_static 只调 f2f 侧 axial，
+          map prior 只调 map 侧 nonaxial。 -->
+  <!-- 是否启动帧间位姿融合,直接帧到帧的fast-gicp很抖 -->
+  <arg name="enable_frame2frame_ndt" default="true" />
+  <!-- 帧间配准方法；只有 enable_frame2frame_ndt=true 时才会真正计算 f2f_absolute_pose -->
+  <!-- 可选：NDT_OMP / FAST_VGICP -->
   <arg name="frame2frame_reg_method" default="FAST_GICP" />
+  <!-- 是否按 map_score / f2f_score 生成 map_conf 与 f2f_conf；
+       false 时两侧基础置信度都按 1.0 处理 -->
   <arg name="enable_score_weighted_fusion" default="true" />
-  <arg name="f2f_score_confidence_gain" default="5.0" />
+  <!-- 为0时，只提供初值，不提供后面的融合 -->
+  <arg name="f2f_score_confidence_gain" default="0" />
+  <!-- 是否启用方向相关融合。
+       true: 平移分为 axial / nonaxial 分别加权；
+       false: 只使用统一的 w_f2f_t 做各向同性平移融合 -->
+  <arg name="enable_axis_anisotropic_fusion" default="true" />
+  <!-- axial / nonaxial 四个基础增益：
+       仅在 enable_axis_anisotropic_fusion=true 时生效；
+       值越大，对应侧（map 或 f2f）在该方向上的信息权重越高 -->
+  <arg name="f2f_axial_conf_gain" default="1.0" />
+  <arg name="f2f_nonaxial_conf_gain" default="0.25" />
+  <arg name="map_axial_conf_gain" default="0.3" />
+  <arg name="map_nonaxial_conf_gain" default="1.0" />
+  <!-- 墙结构可观测性自适应：
+       仅在地图配准可靠时，根据 wall_r 增强 map 侧 axial 信息权重；
+       只影响 axial，不影响 nonaxial -->
+  <arg name="enable_wall_r_axial_adaptation" default="false" />
+  <arg name="wall_r_axial_beta" default="1.0" />
+  <arg name="wall_r_axial_scale_min" default="1.0" />
+  <arg name="wall_r_axial_scale_max" default="2.5" />
+  <!-- 增量静态结构轴向自适应：
+       根据 r_inc_static 调整 f2f 侧 axial 信息权重；
+       只影响 axial，不影响 nonaxial -->
+  <arg name="enable_inc_static_axial_adaptation" default="true" />
+  <!-- 时序窗口长度（帧数）。越大越平滑、触发更严格，但响应更慢 -->
+  <arg name="inc_static_window_size" default="15" />
+  <!-- 单个未知体素在窗口内至少出现多少次才记为“稳定未知体素” -->
+  <arg name="inc_static_min_hits" default="15" />
+  <!-- 当前帧点云下采样步长。越大计算越快，但统计更粗 -->
+  <arg name="inc_static_sample_step" default="4" />
+  <!-- 当前帧未知体素数量门槛：未达到该数量时，不计算 stable_ratio（直接按0处理） -->
+  <arg name="inc_static_min_unknown_voxels" default="20" />
+  <!-- 轴向自适应强度：以 1.0 为基准，死区外按 beta 朝目标缩放，并限制在 [min,max]，斜率0.05时稍差 -->
+  <arg name="inc_static_beta" default="0.1" />
+  <!-- r_inc_static 死区阈值：低于该值时强制 scale=1.0，仅高于阈值才开始增益 -->
+  <arg name="inc_static_r_deadzone" default="0.25" />
+  <!-- 轴向自适应缩放下界 -->
+  <arg name="inc_static_scale_min" default="1.0" />
+  <!-- 轴向自适应缩放上界 -->
+  <arg name="inc_static_scale_max" default="1.5" />
+  <!-- 轴向静态特征实验使用独立参考体素，不受后续 nonaxial prior 参数调整影响 -->
+  <arg name="inc_static_reference_csv_arg" default="/home/scy/catkin_ws_hdl_location/墙平面0416/prior_layer_map_0805_ours_optimized_22/prior_voxel_layer_from_map.csv" />
+  <arg name="inc_static_reference_voxel_size_arg" default="2.0" />
+  
+
+  <arg name="log_output_dir" default="/media/scy/新加卷/毕业论文/实验数据/定位/大海则/我们的先验地图定位/本文方法" />
+  <arg name="enable_reg_debug_csv" default="true" />
+  <!-- 主线程定位耗时指标 + 定位状态指标 -->
+  <arg name="reg_debug_csv_path" default="$(arg log_output_dir)/main_thread_localization_metrics.csv" />
+  <!-- 后台地图调度指标 -->
+  <arg name="enable_tile_timing_csv" default="true" />
+  <arg name="tile_timing_csv_path" default="$(arg log_output_dir)/background_map_scheduling_metrics.csv" />
+  <!-- 地图服务端 tile 加载/拼接指标 -->
+  <arg name="enable_tile_loading_csv" default="true" />
+  <arg name="tile_loading_csv_path" default="$(arg log_output_dir)/tile_server_loading_metrics.csv" />
+  <arg name="experiment_config_path" default="$(arg log_output_dir)/experiment_config.txt" />
   <arg name="enable_robot_odometry_prediction" value="false" />
   <arg name="robot_odom_frame_id" value="odom" />
   <arg name="plot_estimation_errors" value="false" />
+  <!-- map prior 体素层控制：
+       enable_map_prior_layer 控制是否将体素先验用于地图侧融合；
+       enable_map_prior_nonaxial_adaptation 控制其是否进入 nonaxial 融合；
+       当前代码中体素先验不再改全局 map_conf，只作用于 map_nonaxial；
+       inc_static 使用独立的 reference csv/voxel_size，不再与 nonaxial prior 共用同一套参考配置；
+       preset 仅改变 prior 参数，不会自动改变 axial 自适应相关开关 -->
+  <!-- map prior experiment presets: off / conservative / mild_boost / custom -->
+  <!-- 注意：当前代码中的体素先验已改为“只惩罚、不增信”，mild_boost 仅表示较弱惩罚 -->
+  <!-- 纯轴向自适应验证：关闭体素先验对地图 nonaxial 的融合影响，仅保留 inc_static 的独立 reference csv -->
+  <arg name="map_prior_experiment_preset" default="off" />
+  <arg name="map_prior_enable" default="false" />
+  <!-- 独立开关：体素先验仅用于调节 map_nonaxial；
+       关闭后仍可保留 enable_map_prior_layer=true 用于日志统计或其他依赖体素表的模块 -->
+  <arg name="enable_map_prior_nonaxial_adaptation" default="true" />
+  <arg name="map_prior_voxel_size_arg" default="2.0" />
+  <arg name="map_prior_sample_step_arg" default="4" />
+  <arg name="map_prior_min_hits_arg" default="150" />
+  <arg name="map_prior_core_gain_arg" default="1.0" />
+  <arg name="map_prior_band_gain_arg" default="0.85" />
+  <arg name="map_prior_inner_gain_arg" default="0.30" />
+  <arg name="map_prior_uncertain_gain_arg" default="0.05" />
+  <arg name="map_prior_conf_floor_arg" default="0.15" />
 
   <include file="$(find hdl_global_localization)/launch/hdl_global_localization.launch" if="$(arg use_global_localization)" />
 <!-- 雷达和imu之间坐标变换，新加修改,参数顺序：yaw pitch roll -->
@@ -58,16 +147,24 @@
 <!-- <param name="globalmap_pcd" value="/home/scy/0805/0805/Mapped/DLO_half_keyframe11_0.05resolution.pcd" /> -->
 
 <param name="globalmap_pcd" value="/media/scy/新加卷/数据集/locus多个地下矿井/真值/_ground_truth-20250124T153559Z-001/_ground_truth/D_Tunnel_Husky4_gt/h4_sr2_gt_map.pcd" />
-<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/0805/ours/pointcloud_map_metadata.yaml" />
-<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/0805/ours/pointcloud_map.pcd" />    
+<!-- <param name="metadata_file" value="//media/scy/新加卷/数据集/autoware_map_output/0805/ours-optimized-2/pointcloud_map_metadata.yaml" />
+<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/0805/ours-optimized-2/pointcloud_map" />     -->
+<param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/0805/ours-optimized-2/pointcloud_map_metadata.yaml" />
+<param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/0805/ours-optimized-2/pointcloud_map" />
       <param name="convert_utm_to_local" value="true" />
-      <param name="downsample_resolution" value="0.25" />
+      <param name="enable_tile_loading_csv" value="$(arg enable_tile_loading_csv)" />
+      <param name="tile_loading_csv_path" value="$(arg tile_loading_csv_path)" />
+      <!-- ndt0.15 -->
+      <param name="downsample_resolution" value="0.35" />
+            <!-- <param name="downsample_resolution" value="0.2" /> -->
+
     </node>
 
     <!-- hdl_localization_nodelet -->
     <node pkg="nodelet" type="nodelet" name="hdl_localization_nodelet" args="load hdl_localization/HdlLocalizationNodelet $(arg nodelet_manager)">
      <!-- 地图参数 -->
-      <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/0805/ours/pointcloud_map_metadata.yaml" />
+      <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/0805/ours-optimized-2/pointcloud_map_metadata.yaml" />
+      
       <param name="tile_radius" value="1" />   <!-- 1=3x3, 2=5x5 -->
 <param name="time_offset_lidar_to_imu" value="0.0" />
 
@@ -85,24 +182,50 @@
       <param name="enable_robot_odometry_prediction" value="$(arg enable_robot_odometry_prediction)" />
       <param name="robot_odom_frame_id" value="$(arg robot_odom_frame_id)" />
       <!-- ndt settings -->
-      <!-- available reg_methods: NDT_OMP, NDT_CUDA_P2D, NDT_CUDA_D2D，FAST_VGICP，GICP，FAST_VGICP,FAST_GICP-->
+      <!-- available reg_methods:FAST_GICP, NDT_OMP, NDT_CUDA_P2D, NDT_CUDA_D2D，FAST_VGICP，GICP，FAST_VGICP,FAST_GICP-->
       <param name="reg_method" value="FAST_GICP" />
-      <!-- if NDT is slow for your PC, try DIRECT1 serach method, which is a bit unstable but extremely fast -->
-      <param name="ndt_neighbor_search_method" value="DIRECT7" />
+      <!-- if NDT is slow for your PC, try DIRECT1，DIRECT7，KDTREE serach method, which is a bit unstable but extremely fast -->
+      <param name="ndt_neighbor_search_method" value="KDTREE" />
       <param name="ndt_neighbor_search_radius" value="2.0" />
-      <param name="ndt_resolution" value="1.0" />
+      <param name="ndt_resolution" value="1.5" />
+      <param name="ndt_num_threads" value="10" />
+      <param name="ndt_max_iterations" value="80" />
+      <param name="ndt_transformation_epsilon" value="0.0005" />
+      <param name="ndt_step_size" value="0.05" />
+      <param name="ndt_outlier_ratio" value="0.55" />
       <param name="enable_frame2frame_ndt" value="$(arg enable_frame2frame_ndt)" />
       <param name="frame_to_frame_reg_num_threads" value="6" />
       <param name="frame2frame_reg_method" value="$(arg frame2frame_reg_method)" />
       <param name="enable_score_weighted_fusion" value="$(arg enable_score_weighted_fusion)" />
       <!-- 表示分数控制加权，越小加权越高 -->
-      <param name="ndt_score_good" value="0.30" />
-      <param name="ndt_score_bad" value="3.0" />
+      <param name="ndt_score_good" value="0.06" />
+      <param name="ndt_score_bad" value="0.30" />
+
       <param name="ndt_score_min_confidence" value="0.05" />
       <param name="f2f_score_confidence_gain" value="$(arg f2f_score_confidence_gain)" />
+      <param name="enable_axis_anisotropic_fusion" value="$(arg enable_axis_anisotropic_fusion)" />
+      <param name="f2f_axial_conf_gain" value="$(arg f2f_axial_conf_gain)" />
+      <param name="f2f_nonaxial_conf_gain" value="$(arg f2f_nonaxial_conf_gain)" />
+      <param name="map_axial_conf_gain" value="$(arg map_axial_conf_gain)" />
+      <param name="map_nonaxial_conf_gain" value="$(arg map_nonaxial_conf_gain)" />
+      <param name="enable_wall_r_axial_adaptation" value="$(arg enable_wall_r_axial_adaptation)" />
+      <param name="wall_r_axial_beta" value="$(arg wall_r_axial_beta)" />
+      <param name="wall_r_axial_scale_min" value="$(arg wall_r_axial_scale_min)" />
+      <param name="wall_r_axial_scale_max" value="$(arg wall_r_axial_scale_max)" />
+      <param name="enable_inc_static_axial_adaptation" value="$(arg enable_inc_static_axial_adaptation)" />
+      <param name="inc_static_window_size" value="$(arg inc_static_window_size)" />
+      <param name="inc_static_min_hits" value="$(arg inc_static_min_hits)" />
+      <param name="inc_static_sample_step" value="$(arg inc_static_sample_step)" />
+      <param name="inc_static_min_unknown_voxels" value="$(arg inc_static_min_unknown_voxels)" />
+      <param name="inc_static_beta" value="$(arg inc_static_beta)" />
+      <param name="inc_static_r_deadzone" value="$(arg inc_static_r_deadzone)" />
+      <param name="inc_static_scale_min" value="$(arg inc_static_scale_min)" />
+      <param name="inc_static_scale_max" value="$(arg inc_static_scale_max)" />
+      <param name="inc_static_reference_csv" value="$(arg inc_static_reference_csv_arg)" />
+      <param name="inc_static_reference_voxel_size" value="$(arg inc_static_reference_voxel_size_arg)" />
       <!-- lightweight f2f confidence filtering (default off) -->
-      <param name="enable_f2f_confidence_filter" value="false" />
-      <param name="enable_f2f_dynamic_filter" value="false" />
+      <param name="enable_f2f_confidence_filter" value="true" />
+      <param name="ena-ble_f2f_dynamic_filter" value="true" />
       <param name="f2f_wall_y_threshold" value="3.0" />
       <param name="f2f_wall_z_min" value="0.2" />
       <param name="f2f_wall_z_max" value="3.0" />
@@ -110,6 +233,38 @@
       <param name="f2f_dynamic_voxel_size" value="0.5" />
       <param name="f2f_dynamic_keep_ratio" value="0.25" />
       <param name="f2f_min_filtered_points" value="1000" />
+      <!-- axis prior (1D along centerline, without cross-section area descriptor) -->
+      <param name="enable_axis_prior" value="false" />
+      <!-- <param name="axis_centerline_csv" value="/home/scy/catkin_ws_hdl_location/中轴/ours-map/ours_map_manual4_noalign_centerline.csv" />
+      <param name="axis_profile_csv" value="/home/scy/catkin_ws_hdl_location/中轴/ours-map/ours_map_manual4_noalign_profile.csv" /> -->
+      <param name="axis_centerline_csv" value="/home/scy/catkin_ws_hdl_location/中轴/axis_0416_new5_noalign_centerline.csv" />
+      <param name="axis_profile_csv" value="/home/scy/catkin_ws_hdl_location/中轴/axis_0416_new5_noalign_profile.csv" />
+      <param name="axis_search_window" value="6.0" />
+      <param name="axis_lateral_weight" value="1.0" />
+      <param name="axis_vertical_weight" value="0.2" />
+      <param name="axis_smooth_weight" value="0.01" />
+      <param name="axis_temporal_weight" value="0.05" />
+      <param name="axis_max_lateral" value="3.0" />
+      <param name="axis_max_delta_s" value="0.15" />
+      <param name="axis_prealign_only_when_degenerate" value="false" />
+      <param name="axis_postalign_only_when_degenerate" value="true" />
+      <!-- map prior voxel layer (core/band/inner/uncertain, penalty-only for map_nonaxial) -->
+      <param name="enable_map_prior_layer" value="$(eval 'false' if arg('map_prior_experiment_preset') == 'off' else ('true' if arg('map_prior_experiment_preset') in ['conservative', 'mild_boost'] else arg('map_prior_enable')))" />
+      <param name="enable_map_prior_nonaxial_adaptation" value="$(arg enable_map_prior_nonaxial_adaptation)" />
+      <param name="map_prior_csv" value="/home/scy/catkin_ws_hdl_location/墙平面0416/prior_layer_map_0805_ours_optimized_22/prior_voxel_layer_from_map.csv" />
+      <param name="map_prior_voxel_size" value="$(eval '2.0' if arg('map_prior_experiment_preset') in ['conservative', 'mild_boost'] else arg('map_prior_voxel_size_arg'))" />
+      <param name="map_prior_sample_step" value="$(eval '4' if arg('map_prior_experiment_preset') in ['conservative', 'mild_boost'] else arg('map_prior_sample_step_arg'))" />
+      <param name="map_prior_min_hits" value="$(eval '150' if arg('map_prior_experiment_preset') in ['conservative', 'mild_boost'] else arg('map_prior_min_hits_arg'))" />
+      <param name="map_prior_core_gain" value="$(eval '1.00' if arg('map_prior_experiment_preset') == 'conservative' else ('1.05' if arg('map_prior_experiment_preset') == 'mild_boost' else arg('map_prior_core_gain_arg')))" />
+      <param name="map_prior_band_gain" value="$(eval '0.85' if arg('map_prior_experiment_preset') == 'conservative' else ('0.90' if arg('map_prior_experiment_preset') == 'mild_boost' else arg('map_prior_band_gain_arg')))" />
+      <param name="map_prior_inner_g是ain" value="$(eval '0.30' if arg('map_prior_experiment_preset') in ['conservative', 'mild_boost'] else arg('map_prior_inner_gain_arg'))" />
+      <param name="map_prior_uncertain_gain" value="$(eval '0.05' if arg('map_prior_experiment_preset') in ['conservative', 'mild_boost'] else arg('map_prior_uncertain_gain_arg'))" />
+      <param name="map_prior_conf_floor" value="$(eval '0.15' if arg('map_prior_experiment_preset') in ['conservative', 'mild_boost'] else arg('map_prior_conf_floor_arg'))" />
+      <param name="enable_reg_debug_csv" value="$(arg enable_reg_debug_csv)" />
+      <param name="reg_debug_csv_path" value="$(arg reg_debug_csv_path)" />
+      <param name="enable_tile_timing_csv" value="$(arg enable_tile_timing_csv)" />
+      <param name="tile_timing_csv_path" value="$(arg tile_timing_csv_path)" />
+      <param name="experiment_config_path" value="$(arg experiment_config_path)" />
       <!-- <param name="ndt_neighbor_search_radius" value="1.0" />
       <param name="ndt_resolution" value="0.6" /> -->
       <!-- 初始0.1，会有个别帧索引溢出的问题 -->
@@ -130,40 +285,60 @@
       <!--gt地图初始位姿  -->
     <param name="specify_init_pose" value="true" />
     <!-- 605s -->
-      <!-- <param name="init_pos_x" value="1472.937134" />
-      <param name="init_pos_y" value="-119.442673" />
-      <param name="init_pos_z" value="-50.079445" />
-      <param name="init_ori_w" value="0.015251" />
-      <param name="init_ori_x" value="-0.026834" />
-      <param name="init_ori_y" value="0.155982" />
-      <param name="init_ori_z" value="-0.987278" /> -->
+      <!-- <param name="init_pos_x" value="1530.937134" />
+      <param name="init_pos_y" value="-268.442673" />
+      <param name="init_pos_z" value="0.5" />
+      <param name="init_ori_w" value="0.0065251" />
+      <param name="init_ori_x" value="-0.00826834" />
+      <param name="init_ori_y" value="0.0233589" />
+      <param name="init_ori_z" value="-0.990639" /> -->
 <!-- 693s -->
-      <param name="init_pos_x" value="1244.937134" />
-      <param name="init_pos_y" value="-127.442673" />
-      <param name="init_pos_z" value="-40.079445" />
-      <param name="init_ori_w" value="0.022545" />
-      <param name="init_ori_x" value="-0.016711" />
-      <param name="init_ori_y" value="0.133589" />
-      <param name="init_ori_z" value="-0.990639" />
+      
+<!-- 公司地图参数 -->
+      <!-- <param name="init_pos_x" value="1302.937134" />
+      <param name="init_pos_y" value="-272.442673" />
+      <param name="init_pos_z" value="0.879445" />
+      <param name="init_ori_w" value="0.0066545" />
+      <param name="init_ori_x" value="-0.0086711" />
+      <param name="init_ori_y" value="0.0233589" />
+      <param name="init_ori_z" value="-0.990639" /> -->
 
-      <!-- 837s -->
-      <!-- <param name="init_pos_x" value="1100.937134" />
-      <param name="init_pos_y" value="-132.442673" />
+<!-- ours -->
+      <!-- <param name="init_pos_x" value="1239.937134" />
+      <param name="init_pos_y" value="-126.442673" />
+      <param name="init_pos_z" value="-40.879445" />
+      <param name="init_ori_w" value="0.0066545" />
+      <param name="init_ori_x" value="-0.0086711" />
+      <param name="init_ori_y" value="0.0233589" />
+      <param name="init_ori_z" value="-0.990639" /> -->
+
+
+      <!-- 847s -->
+      <!-- <param name="init_pos_x" value="1070.937134" />
+      <param name="init_pos_y" value="-133.442673" />
       <param name="init_pos_z" value="-35.079445" />
-      <param name="init_ori_w" value="0.015251" />
-      <param name="init_ori_x" value="-0.026834" />
-      <param name="init_ori_y" value="0.155982" />
-      <param name="init_ori_z" value="-0.987278" /> -->
+      <param name="init_ori_w" value="0.0066545" />
+      <param name="init_ori_x" value="-0.0086711" />
+      <param name="init_ori_y" value="0.0233589" />
+      <param name="init_ori_z" value="-0.990639" /> -->
+<!-- 900 -->
 
+  <param name="init_pos_x" value="925.937134" />
+      <param name="init_pos_y" value="-140.442673" />
+      <param name="init_pos_z" value="-28.079445" />
+      <param name="init_ori_w" value="0.0066545" />
+      <param name="init_ori_x" value="-0.0086711" />
+      <param name="init_ori_y" value="0.0233589" />
+      <param name="init_ori_z" value="-0.990639" /> 
 
-      <!-- 912s -->
-      <!-- <param name="init_pos_x" value="1100.937134" />
-      <param name="init_pos_y" value="-132.442673" />
-      <param name="init_pos_z" value="-35.079445" />
-      <param name="init_ori_w" value="0.015251" />
-      <param name="init_ori_x" value="-0.026834" />
-      <param name="init_ori_y" value="0.155982" />
-      <param name="init_ori_z" value="-0.987278" /> -->
+      <!-- 990 -->
+        <!-- <param name="init_pos_x" value="595.937134" />
+      <param name="init_pos_y" value="-152.442673" />
+      <param name="init_pos_z" value="-20.079445" />
+      <param name="init_ori_w" value="0.0066545" />
+      <param name="init_ori_x" value="-0.0086711" />
+      <param name="init_ori_y" value="0.0233589" />
+      <param name="init_ori_z" value="-0.990639" />  -->
 
       <param name="use_global_localization" value="$(arg use_global_localization)" />
     </node>

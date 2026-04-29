@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <launch>
-  <!-- 只提供fast-gicp初值，不提供融合帧间融合到后续结果 -->
+  <!-- arguments -->
   <arg name="nodelet_manager" default="$(anon hdl_localization_nodelet_manager)" />
   <arg name="points_topic" default="/perception/lidar_up_pointcloud" />
   <!-- input clouds are transformed in odom_child_frame, and then localization is performed in that frame -->
@@ -16,27 +16,45 @@
   <arg name="invert_imu_gyro" default="false" />
   <arg name="use_global_localization" default="false" />
   <arg name="imu_topic" default="/localization/imu" />
+  <!-- 当前代码中的 map/f2f 融合逻辑：
+       1) 先做帧到地图配准，得到 map_pose 与 map_score；
+       2) 若 enable_frame2frame_ndt=true，则再做帧间配准，得到 f2f_absolute_pose 作为额外观测；
+       3) 若有 f2f 结果，则进入 map-f2f 融合；若没有，则直接使用 map_pose；
+       4) 若 f2f_score_confidence_gain=0，则 f2f 只作为初值/参考，不参与最终权重；
+       5) 若 enable_axis_anisotropic_fusion=true，则平移会拆成 axial / nonaxial 两个方向分别融合；
+       6) wall_r 只调 map 侧 axial，inc_static 只调 f2f 侧 axial，
+          map prior 只调 map 侧 nonaxial。 -->
   <!-- 是否启动帧间位姿融合,直接帧到帧的fast-gicp很抖 -->
   <arg name="enable_frame2frame_ndt" default="true" />
-  <!-- NDT_OMP,FAST_GIC P -->
+  <!-- 帧间配准方法；只有 enable_frame2frame_ndt=true 时才会真正计算 f2f_absolute_pose -->
+  <!-- 可选：NDT_OMP / FAST_GICP -->
   <arg name="frame2frame_reg_method" default="FAST_GICP" />
-  <!-- 原始基线版：FAST_GICP 仅提供帧到地图 NDT 初值，不参与后续融合 -->
+  <!-- 是否按 map_score / f2f_score 生成 map_conf 与 f2f_conf；
+       false 时两侧基础置信度都按 1.0 处理 -->
   <arg name="enable_score_weighted_fusion" default="true" />
-  <!-- 为0时，FAST_GICP 只提供初值，不参与 map-f2f 融合 -->
-  <arg name="f2f_score_confidence_gain" default="0.0" />
-  <!-- 原始基线不启用方向相关融合 -->
+  <!-- 为0时，只提供初值，不提供后面的融合 -->
+  <arg name="f2f_score_confidence_gain" default="0.5" />
+  <!-- 是否启用方向相关融合。
+       true: 平移分为 axial / nonaxial 分别加权；
+       false: 只使用统一的 w_f2f_t 做各向同性平移融合 -->
   <arg name="enable_axis_anisotropic_fusion" default="false" />
-  <!-- 以下参数在原始基线中保留默认值，但不参与方向相关融合 -->
+  <!-- axial / nonaxial 四个基础增益：
+       仅在 enable_axis_anisotropic_fusion=true 时生效；
+       值越大，对应侧（map 或 f2f）在该方向上的信息权重越高 -->
   <arg name="f2f_axial_conf_gain" default="1.0" />
   <arg name="f2f_nonaxial_conf_gain" default="0.25" />
   <arg name="map_axial_conf_gain" default="0.3" />
   <arg name="map_nonaxial_conf_gain" default="1.0" />
-  <!-- 墙结构可观测性自适应：仅在地图配准可靠时，根据 wall_r 增强轴向 map 信息权重 -->
+  <!-- 墙结构可观测性自适应：
+       仅在地图配准可靠时，根据 wall_r 增强 map 侧 axial 信息权重；
+       只影响 axial，不影响 nonaxial -->
   <arg name="enable_wall_r_axial_adaptation" default="false" />
   <arg name="wall_r_axial_beta" default="1.0" />
   <arg name="wall_r_axial_scale_min" default="1.0" />
   <arg name="wall_r_axial_scale_max" default="2.5" />
-  <!-- 增量静态结构轴向自适应：根据 r_inc_static 调整轴向 f2f 信息权重 -->
+  <!-- 增量静态结构轴向自适应：
+       根据 r_inc_static 调整 f2f 侧 axial 信息权重；
+       只影响 axial，不影响 nonaxial -->
   <arg name="enable_inc_static_axial_adaptation" default="false" />
   <!-- 时序窗口长度（帧数）。越大越平滑、触发更严格，但响应更慢 -->
   <arg name="inc_static_window_size" default="15" />
@@ -46,25 +64,46 @@
   <arg name="inc_static_sample_step" default="4" />
   <!-- 当前帧未知体素数量门槛：未达到该数量时，不计算 stable_ratio（直接按0处理） -->
   <arg name="inc_static_min_unknown_voxels" default="20" />
-  <!-- 轴向自适应强度：以 1.0 为基准，死区外按 beta 朝目标缩放，并限制在 [min,max] -->
-  <arg name="inc_static_beta" default="0.05" />
+  <!-- 轴向自适应强度：以 1.0 为基准，死区外按 beta 朝目标缩放，并限制在 [min,max]，斜率0.05时稍差 -->
+  <arg name="inc_static_beta" default="0.1" />
   <!-- r_inc_static 死区阈值：低于该值时强制 scale=1.0，仅高于阈值才开始增益 -->
   <arg name="inc_static_r_deadzone" default="0.25" />
   <!-- 轴向自适应缩放下界 -->
   <arg name="inc_static_scale_min" default="1.0" />
   <!-- 轴向自适应缩放上界 -->
   <arg name="inc_static_scale_max" default="1.5" />
+  <!-- 轴向静态特征实验使用独立参考体素，不受后续 nonaxial prior 参数调整影响 -->
+  <arg name="inc_static_reference_csv_arg" default="/home/scy/catkin_ws_hdl_location/墙平面0416/prior_layer_map_tuned_clean10/prior_voxel_layer_from_map.csv" />
+  <arg name="inc_static_reference_voxel_size_arg" default="2.0" />
   
 
+  <arg name="log_output_dir" default="/media/scy/新加卷/毕业论文/实验数据/动态地图实验/E0_default_run" />
   <arg name="enable_reg_debug_csv" default="true" />
-  <arg name="reg_debug_csv_path" default="/home/scy/catkin_ws_hdl_location/reg_debug_0416_gt-original.csv" />
+  <!-- 主线程定位耗时指标 + 定位状态指标 -->
+  <arg name="reg_debug_csv_path" default="$(arg log_output_dir)/main_thread_localization_metrics.csv" />
+  <!-- 后台地图调度指标 -->
+  <arg name="enable_tile_timing_csv" default="true" />
+  <arg name="tile_timing_csv_path" default="$(arg log_output_dir)/background_map_scheduling_metrics.csv" />
+  <!-- 地图服务端 tile 加载/拼接指标 -->
+  <arg name="enable_tile_loading_csv" default="true" />
+  <arg name="tile_loading_csv_path" default="$(arg log_output_dir)/tile_server_loading_metrics.csv" />
+  <arg name="experiment_config_path" default="$(arg log_output_dir)/experiment_config.txt" />
   <arg name="enable_robot_odometry_prediction" value="false" />
   <arg name="robot_odom_frame_id" value="odom" />
   <arg name="plot_estimation_errors" value="false" />
-  <!-- 原始基线不启用体素先验 -->
+  <!-- map prior 体素层控制：
+       enable_map_prior_layer 控制是否将体素先验用于地图侧融合；
+       enable_map_prior_nonaxial_adaptation 控制其是否进入 nonaxial 融合；
+       当前代码中体素先验不再改全局 map_conf，只作用于 map_nonaxial；
+       inc_static 使用独立的 reference csv/voxel_size，不再与 nonaxial prior 共用同一套参考配置；
+       preset 仅改变 prior 参数，不会自动改变 axial 自适应相关开关 -->
+  <!-- map prior experiment presets: off / conservative / mild_boost / custom -->
+  <!-- 注意：当前代码中的体素先验已改为“只惩罚、不增信”，mild_boost 仅表示较弱惩罚 -->
+  <!-- 纯轴向自适应验证：关闭体素先验对地图 nonaxial 的融合影响，仅保留 inc_static 的独立 reference csv -->
   <arg name="map_prior_experiment_preset" default="off" />
   <arg name="map_prior_enable" default="false" />
-  <!-- 独立开关：体素先验仅用于调节 map_nonaxial，关闭后仍可加载体素用于日志或其他统计 -->
+  <!-- 独立开关：体素先验仅用于调节 map_nonaxial；
+       关闭后仍可保留 enable_map_prior_layer=true 用于日志统计或其他依赖体素表的模块 -->
   <arg name="enable_map_prior_nonaxial_adaptation" default="false" />
   <arg name="map_prior_voxel_size_arg" default="2.0" />
   <arg name="map_prior_sample_step_arg" default="4" />
@@ -111,6 +150,8 @@
 <param name="metadata_file" value="/media/scy/新加卷/数据集/autoware_map_output/公司地图/pointcloud_map_metadata.yaml" />
 <param name="tile_map_dir" value="/media/scy/新加卷/数据集/autoware_map_output/公司地图/pointcloud_map.pcd" />    
       <param name="convert_utm_to_local" value="true" />
+      <param name="enable_tile_loading_csv" value="$(arg enable_tile_loading_csv)" />
+      <param name="tile_loading_csv_path" value="$(arg tile_loading_csv_path)" />
       <!-- ndt0.15 -->
       <param name="downsample_resolution" value="0.3" />
             <!-- <param name="downsample_resolution" value="0.2" /> -->
@@ -144,7 +185,7 @@
       <param name="ndt_neighbor_search_method" value="KDTREE" />
       <param name="ndt_neighbor_search_radius" value="2.0" />
       <param name="ndt_resolution" value="2.0" />
-      <param name="ndt_num_threads" value="6" />
+      <param name="ndt_num_threads" value="10" />
       <param name="ndt_max_iterations" value="80" />
       <param name="ndt_transformation_epsilon" value="0.0005" />
       <param name="ndt_step_size" value="0.05" />
@@ -177,9 +218,11 @@
       <param name="inc_static_r_deadzone" value="$(arg inc_static_r_deadzone)" />
       <param name="inc_static_scale_min" value="$(arg inc_static_scale_min)" />
       <param name="inc_static_scale_max" value="$(arg inc_static_scale_max)" />
-      <!-- 原始基线不启用额外的 f2f 置信度/动态过滤 -->
-      <param name="enable_f2f_confidence_filter" value="false" />
-      <param name="enable_f2f_dynamic_filter" value="false" />
+      <param name="inc_static_reference_csv" value="$(arg inc_static_reference_csv_arg)" />
+      <param name="inc_static_reference_voxel_size" value="$(arg inc_static_reference_voxel_size_arg)" />
+      <!-- lightweight f2f confidence filtering (default off) -->
+      <param name="enable_f2f_confidence_filter" value="true" />
+      <param name="enable_f2f_dynamic_filter" value="true" />
       <param name="f2f_wall_y_threshold" value="3.0" />
       <param name="f2f_wall_z_min" value="0.2" />
       <param name="f2f_wall_z_max" value="3.0" />
@@ -214,6 +257,9 @@
       <param name="map_prior_conf_floor" value="$(eval '0.15' if arg('map_prior_experiment_preset') in ['conservative', 'mild_boost'] else arg('map_prior_conf_floor_arg'))" />
       <param name="enable_reg_debug_csv" value="$(arg enable_reg_debug_csv)" />
       <param name="reg_debug_csv_path" value="$(arg reg_debug_csv_path)" />
+      <param name="enable_tile_timing_csv" value="$(arg enable_tile_timing_csv)" />
+      <param name="tile_timing_csv_path" value="$(arg tile_timing_csv_path)" />
+      <param name="experiment_config_path" value="$(arg experiment_config_path)" />
       <!-- <param name="ndt_neighbor_search_radius" value="1.0" />
       <param name="ndt_resolution" value="0.6" /> -->
       <!-- 初始0.1，会有个别帧索引溢出的问题 -->
@@ -234,31 +280,32 @@
       <!--gt地图初始位姿  -->
     <param name="specify_init_pose" value="true" />
     <!-- 605s -->
-      <param name="init_pos_x" value="1530.937134" />
-      <param name="init_pos_y" value="-272.442673" />
+      <!-- <param name="init_pos_x" value="1530.937134" />
+      <param name="init_pos_y" value="-268.442673" />
       <param name="init_pos_z" value="0.5" />
       <param name="init_ori_w" value="0.0065251" />
       <param name="init_ori_x" value="-0.00826834" />
       <param name="init_ori_y" value="0.0233589" />
-      <param name="init_ori_z" value="-0.990639" />
+      <param name="init_ori_z" value="-0.990639" /> -->
 <!-- 693s -->
-      <!-- <param name="init_pos_x" value="1313.937134" />
+      
+<!-- 公司地图参数 -->
+      <!-- <param name="init_pos_x" value="1302.937134" />
       <param name="init_pos_y" value="-272.442673" />
       <param name="init_pos_z" value="0.879445" />
       <param name="init_ori_w" value="0.0066545" />
       <param name="init_ori_x" value="-0.0086711" />
       <param name="init_ori_y" value="0.0233589" />
       <param name="init_ori_z" value="-0.990639" /> -->
-<!-- 公司地图参数 -->
-      <param name="init_pos_x" value="1302.937134" />
-      <param name="init_pos_y" value="-272.442673" />
-      <param name="init_pos_z" value="0.879445" />
+
+<!-- ours -->
+      <!-- <param name="init_pos_x" value="1239.937134" />
+      <param name="init_pos_y" value="-126.442673" />
+      <param name="init_pos_z" value="-40.879445" />
       <param name="init_ori_w" value="0.0066545" />
       <param name="init_ori_x" value="-0.0086711" />
       <param name="init_ori_y" value="0.0233589" />
-      <param name="init_ori_z" value="-0.990639" />
-
-
+      <param name="init_ori_z" value="-0.990639" /> -->
 
 
       <!-- 837s -->
@@ -269,6 +316,16 @@
       <param name="init_ori_x" value="-0.026834" />
       <param name="init_ori_y" value="0.155982" />
       <param name="init_ori_z" value="-0.987278" /> -->
+
+
+<!-- 900 -->
+     <param name="init_pos_x" value="9.927022094726562500e+02" />
+      <param name="init_pos_y" value="-2.771769104003906250e+02" />
+      <param name="init_pos_z" value="-7.101358175277709961e-01" />
+      <param name="init_ori_w" value="5.925241431677007002e-03" />
+      <param name="init_ori_x" value="-6.558525513715837175e-03" />
+      <param name="init_ori_y" value="6.823618782533135557e-03" />
+      <param name="init_ori_z" value="-9.999377112062628470e-01" />
 
 
       <!-- 912s -->

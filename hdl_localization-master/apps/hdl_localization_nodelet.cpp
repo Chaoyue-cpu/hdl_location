@@ -455,6 +455,7 @@ private:
 
     ros::Rate rate(100);
     while (ros::ok()) {
+      retryPendingTileRequest();
       map_queue_.callAvailable(ros::WallDuration(0.01));
       rate.sleep();
     }
@@ -1163,20 +1164,70 @@ private:
 
   //   NODELET_INFO_STREAM("Requesting " << tiles.size() << " tiles.");
   // }
-  void publishTileRequest(const std::vector<std::string>& tiles) {
+  bool tryPublishTileRequest(const std::vector<std::string>& tiles) {
     if (tiles.empty()) {
-      return;
+      return false;
+    }
+
+    if (tile_request_pub.getNumSubscribers() <= 0) {
+      return false;
     }
 
     last_tile_request_stamp_ = ros::Time::now();
     last_tile_request_tp_ = std::chrono::steady_clock::now();
     last_tile_request_tp_valid_ = true;
     last_requested_tiles_ = tiles;
+
     hdl_localization::TileRequest msg;
     msg.tiles = tiles;
     tile_request_pub.publish(msg);
 
     log_tile_timing_event(resolve_log_stamp(last_tile_request_stamp_), "request_tiles", tiles.size(), 0.0, 0.0, "publish_request", tiles);
+    return true;
+  }
+
+  void retryPendingTileRequest() {
+    std::vector<std::string> pending_tiles;
+    {
+      std::lock_guard<std::mutex> lock(pending_tile_request_mutex_);
+      if (!has_pending_tile_request_) {
+        return;
+      }
+      if (ros::WallTime::now() < next_tile_request_retry_time_) {
+        return;
+      }
+      pending_tiles = pending_tile_request_tiles_;
+    }
+
+    if (tryPublishTileRequest(pending_tiles)) {
+      std::lock_guard<std::mutex> lock(pending_tile_request_mutex_);
+      has_pending_tile_request_ = false;
+      pending_tile_request_tiles_.clear();
+      pending_tile_request_warned_ = false;
+      return;
+    }
+
+    std::lock_guard<std::mutex> lock(pending_tile_request_mutex_);
+    next_tile_request_retry_time_ = ros::WallTime::now() + ros::WallDuration(tile_request_retry_interval_sec_);
+  }
+
+  void publishTileRequest(const std::vector<std::string>& tiles) {
+    if (tiles.empty()) {
+      return;
+    }
+
+    if (tryPublishTileRequest(tiles)) {
+      return;
+    }
+
+    std::lock_guard<std::mutex> lock(pending_tile_request_mutex_);
+    pending_tile_request_tiles_ = tiles;
+    has_pending_tile_request_ = true;
+    next_tile_request_retry_time_ = ros::WallTime::now() + ros::WallDuration(tile_request_retry_interval_sec_);
+    if (!pending_tile_request_warned_) {
+      NODELET_WARN_STREAM("tile request publisher has no subscribers yet, delaying initial tile request retry");
+      pending_tile_request_warned_ = true;
+    }
   }
 
   /**
@@ -1683,6 +1734,12 @@ private:
   std::vector<std::string> last_tiles;
 
   ros::Publisher tile_request_pub;
+  std::mutex pending_tile_request_mutex_;
+  std::vector<std::string> pending_tile_request_tiles_;
+  bool has_pending_tile_request_ = false;
+  bool pending_tile_request_warned_ = false;
+  ros::WallTime next_tile_request_retry_time_;
+  const double tile_request_retry_interval_sec_ = 0.1;
 
   double time_offset_lidar_to_imu;  // 时间偏移量
 
