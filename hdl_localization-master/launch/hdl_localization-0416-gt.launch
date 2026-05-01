@@ -37,7 +37,7 @@
   <!-- 是否启用方向相关融合。
        true: 平移分为 axial / nonaxial 分别加权；
        false: 只使用统一的 w_f2f_t 做各向同性平移融合 -->
-  <arg name="enable_axis_anisotropic_fusion" default="true" />
+  <arg name="enable_axis_anisotropic_fusion" default="false" />
   <!-- axial / nonaxial 四个基础增益：
        仅在 enable_axis_anisotropic_fusion=true 时生效；
        值越大，对应侧（map 或 f2f）在该方向上的信息权重越高 -->
@@ -78,7 +78,7 @@
   
 
   <arg name="enable_reg_debug_csv" default="true" />
-  <arg name="reg_debug_csv_path" default="/home/scy/catkin_ws_hdl_location/reg_debug_0416_gt-最终测试.csv" />
+  <arg name="reg_debug_csv_path" default="/home/scy/catkin_ws_hdl_location/帧间融合但不分解日志/reg_debug_0416_gt.csv" />
   <arg name="enable_robot_odometry_prediction" value="false" />
   <arg name="robot_odom_frame_id" value="odom" />
   <arg name="plot_estimation_errors" value="false" />
@@ -91,11 +91,11 @@
   <!-- map prior experiment presets: off / conservative / mild_boost / custom -->
   <!-- 注意：当前代码中的体素先验已改为“只惩罚、不增信”，mild_boost 仅表示较弱惩罚 -->
   <!-- 纯轴向自适应验证：关闭体素先验对地图 nonaxial 的融合影响，仅保留 inc_static 的独立 reference csv -->
-  <arg name="map_prior_experiment_preset" default="conservative" />
+  <arg name="map_prior_experiment_preset" default="off" />
   <arg name="map_prior_enable" default="true" />
   <!-- 独立开关：体素先验仅用于调节 map_nonaxial；
        关闭后仍可保留 enable_map_prior_layer=true 用于日志统计或其他依赖体素表的模块 -->
-  <arg name="enable_map_prior_nonaxial_adaptation" default="true" />
+  <arg name="enable_map_prior_nonaxial_adaptation" default="false" />
   <arg name="map_prior_voxel_size_arg" default="2.0" />
   <arg name="map_prior_sample_step_arg" default="4" />
   <arg name="map_prior_min_hits_arg" default="150" />
@@ -177,7 +177,7 @@
       <param name="ndt_num_threads" value="6" />
       <param name="ndt_max_iterations" value="80" />
       <param name="ndt_transformation_epsilon" value="0.0005" />
-      <param name="ndt_step_size" value="0.05" />
+      <param name="ndt_step_size" value="0.2" />
       <param name="ndt_outlier_ratio" value="0.55" />
       <param name="enable_frame2frame_ndt" value="$(arg enable_frame2frame_ndt)" />
       <param name="frame_to_frame_reg_num_threads" value="6" />
@@ -276,13 +276,13 @@
 <!-- 693s -->
       
 <!-- 公司地图参数 -->
-      <param name="init_pos_x" value="1302.937134" />
+      <!-- <param name="init_pos_x" value="1302.937134" />
       <param name="init_pos_y" value="-272.442673" />
       <param name="init_pos_z" value="0.879445" />
       <param name="init_ori_w" value="0.0066545" />
       <param name="init_ori_x" value="-0.0086711" />
       <param name="init_ori_y" value="0.0233589" />
-      <param name="init_ori_z" value="-0.990639" />
+      <param name="init_ori_z" value="-0.990639" /> -->
 
       <!-- 837s -->
       <!-- <param name="init_pos_x" value="1100.937134" />
@@ -293,7 +293,14 @@
       <param name="init_ori_y" value="0.155982" />
       <param name="init_ori_z" value="-0.987278" /> -->
 
-
+<!-- 900 -->
+<param name="init_pos_x" value="990.937134" />
+      <param name="init_pos_y" value="-276.442673" />
+      <param name="init_pos_z" value="0.0" />
+      <param name="init_ori_w" value="0.0066545" />
+      <param name="init_ori_x" value="-0.0086711" />
+      <param name="init_ori_y" value="0.0233589" />
+      <param name="init_ori_z" value="-0.990639" />
       <!-- 912s -->
       <!-- <param name="init_pos_x" value="1100.937134" />
       <param name="init_pos_y" value="-132.442673" />
