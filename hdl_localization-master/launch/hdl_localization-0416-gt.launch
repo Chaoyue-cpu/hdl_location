@@ -92,7 +92,7 @@
   <!-- 注意：当前代码中的体素先验已改为“只惩罚、不增信”，mild_boost 仅表示较弱惩罚 -->
   <!-- 纯轴向自适应验证：关闭体素先验对地图 nonaxial 的融合影响，仅保留 inc_static 的独立 reference csv -->
   <arg name="map_prior_experiment_preset" default="off" />
-  <arg name="map_prior_enable" default="true" />
+  <arg name="map_prior_enable" default="false" />
   <!-- 独立开关：体素先验仅用于调节 map_nonaxial；
        关闭后仍可保留 enable_map_prior_layer=true 用于日志统计或其他依赖体素表的模块 -->
   <arg name="enable_map_prior_nonaxial_adaptation" default="false" />
