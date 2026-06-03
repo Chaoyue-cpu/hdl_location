@@ -37,7 +37,7 @@
   <!-- 是否启用方向相关融合。
        true: 平移分为 axial / nonaxial 分别加权；
        false: 只使用统一的 w_f2f_t 做各向同性平移融合 -->
-  <arg name="enable_axis_anisotropic_fusion" default="true" />
+  <arg name="enable_axis_anisotropic_fusion" default="false" />
   <!-- axial / nonaxial 四个基础增益：
        仅在 enable_axis_anisotropic_fusion=true 时生效；
        值越大，对应侧（map 或 f2f）在该方向上的信息权重越高 -->

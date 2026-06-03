@@ -360,6 +360,9 @@ PoseEstimator::PoseEstimator(
           << "prior_mult,prior_hit_ratio,prior_avg_conf,prior_core_hit_ratio,prior_band_hit_ratio,prior_inner_hit_ratio,"
           << "wall_ratio_inner,wall_relief_inner,wall_r,wall_r_axial_scale,"
           << "inc_unknown_ratio,inc_stable_ratio,r_inc_static,inc_static_axial_scale,"
+          << "map_px,map_py,map_pz,f2f_px,f2f_py,f2f_pz,"
+          << "map_to_f2f_dx,map_to_f2f_dy,map_to_f2f_dz,map_to_f2f_dnorm,map_to_f2f_dax_signed,map_to_f2f_dnonax_norm,"
+          << "fused_from_map_dnorm,fused_from_map_dax_signed,fused_from_map_dnonax_norm,"
           << "px,py,pz,qw,qx,qy,qz\n";
         reg_debug_csv_stream.flush();
         ROS_INFO_STREAM("reg debug csv enabled: " << this->reg_debug_csv_path);
@@ -1233,6 +1236,15 @@ void PoseEstimator::write_reg_debug_row(
   double inc_stable_ratio,
   double r_inc_static,
   double inc_static_axial_scale,
+  const Eigen::Vector3f& map_p,
+  const Eigen::Vector3f& f2f_p,
+  const Eigen::Vector3f& map_to_f2f_delta,
+  double map_to_f2f_delta_norm,
+  double map_to_f2f_delta_axial_signed,
+  double map_to_f2f_delta_nonaxial_norm,
+  double fused_from_map_delta_norm,
+  double fused_from_map_delta_axial_signed,
+  double fused_from_map_delta_nonaxial_norm,
   const Eigen::Vector3f& p,
   const Eigen::Quaternionf& q) {
   if (!enable_reg_debug_csv || !reg_debug_csv_stream.is_open()) {
@@ -1269,6 +1281,21 @@ void PoseEstimator::write_reg_debug_row(
                        << inc_stable_ratio << ","
                        << r_inc_static << ","
                        << inc_static_axial_scale << ","
+                       << map_p.x() << ","
+                       << map_p.y() << ","
+                       << map_p.z() << ","
+                       << f2f_p.x() << ","
+                       << f2f_p.y() << ","
+                       << f2f_p.z() << ","
+                       << map_to_f2f_delta.x() << ","
+                       << map_to_f2f_delta.y() << ","
+                       << map_to_f2f_delta.z() << ","
+                       << map_to_f2f_delta_norm << ","
+                       << map_to_f2f_delta_axial_signed << ","
+                       << map_to_f2f_delta_nonaxial_norm << ","
+                       << fused_from_map_delta_norm << ","
+                       << fused_from_map_delta_axial_signed << ","
+                       << fused_from_map_delta_nonaxial_norm << ","
                        << p.x() << ","
                        << p.y() << ","
                        << p.z() << ","
@@ -1683,6 +1710,36 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   Eigen::Vector3f p = final_pose.block<3, 1>(0, 3);    // 平移
   Eigen::Quaternionf q(final_pose.block<3, 3>(0, 0));  // 姿态
 
+  const Eigen::Vector3f map_p = map_pose.block<3, 1>(0, 3);
+  const Eigen::Vector3f f2f_p = has_f2f_init ? f2f_init_pose.block<3, 1>(0, 3) : map_p;
+  const Eigen::Vector3f map_to_f2f_delta = f2f_p - map_p;
+  const Eigen::Vector3f fused_from_map_delta = p - map_p;
+  double map_to_f2f_delta_norm = map_to_f2f_delta.norm();
+  double map_to_f2f_delta_axial_signed = 0.0;
+  double map_to_f2f_delta_nonaxial_norm = 0.0;
+  double fused_from_map_delta_norm = fused_from_map_delta.norm();
+  double fused_from_map_delta_axial_signed = 0.0;
+  double fused_from_map_delta_nonaxial_norm = 0.0;
+
+  if (axis_centerline.size() >= 2) {
+    double s_ref = 0.0;
+    double lateral = 0.0;
+    if (project_to_axis(map_p, &s_ref, &lateral)) {
+      Eigen::Vector3f axis_point = Eigen::Vector3f::Zero();
+      Eigen::Vector3f axis_tangent = Eigen::Vector3f::UnitX();
+      if (interpolate_axis_sample(s_ref, &axis_point, &axis_tangent) && axis_tangent.norm() > 1e-6f) {
+        axis_tangent.normalize();
+        map_to_f2f_delta_axial_signed = map_to_f2f_delta.dot(axis_tangent);
+        const Eigen::Vector3f map_to_f2f_delta_nonaxial = map_to_f2f_delta - map_to_f2f_delta_axial_signed * axis_tangent;
+        map_to_f2f_delta_nonaxial_norm = map_to_f2f_delta_nonaxial.norm();
+
+        fused_from_map_delta_axial_signed = fused_from_map_delta.dot(axis_tangent);
+        const Eigen::Vector3f fused_from_map_delta_nonaxial = fused_from_map_delta - fused_from_map_delta_axial_signed * axis_tangent;
+        fused_from_map_delta_nonaxial_norm = fused_from_map_delta_nonaxial.norm();
+      }
+    }
+  }
+
   // 确保四元数方向一致（避免跳变）
   if (quat().coeffs().dot(q.coeffs()) < 0.0f) {
     q.coeffs() *= -1.0f;
@@ -1731,6 +1788,15 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
     inc_stable_ratio,
     r_inc_static,
     inc_static_axial_scale,
+    map_p,
+    f2f_p,
+    map_to_f2f_delta,
+    map_to_f2f_delta_norm,
+    map_to_f2f_delta_axial_signed,
+    map_to_f2f_delta_nonaxial_norm,
+    fused_from_map_delta_norm,
+    fused_from_map_delta_axial_signed,
+    fused_from_map_delta_nonaxial_norm,
     p,
     q);
 

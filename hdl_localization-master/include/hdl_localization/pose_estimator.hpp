@@ -237,6 +237,15 @@ private:
     double inc_stable_ratio,
     double r_inc_static,
     double inc_static_axial_scale,
+    const Eigen::Vector3f& map_p,
+    const Eigen::Vector3f& f2f_p,
+    const Eigen::Vector3f& map_to_f2f_delta,
+    double map_to_f2f_delta_norm,
+    double map_to_f2f_delta_axial_signed,
+    double map_to_f2f_delta_nonaxial_norm,
+    double fused_from_map_delta_norm,
+    double fused_from_map_delta_axial_signed,
+    double fused_from_map_delta_nonaxial_norm,
     const Eigen::Vector3f& p,
     const Eigen::Quaternionf& q);
 

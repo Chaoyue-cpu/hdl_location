@@ -307,9 +307,9 @@ private:
       fast_gicp->setTransformationEpsilon(0.001);
       fast_gicp->setMaximumIterations(64);  // 最大迭代次数
       // fast_gicp->setMaxCorrespondenceDistance(2.5);  // 最大搜索半径
-      fast_gicp->setMaxCorrespondenceDistance(2.5);  // 最大搜索半径
+      fast_gicp->setMaxCorrespondenceDistance(2.0);  // 最大搜索半径
 
-      fast_gicp->setCorrespondenceRandomness(30);  // 每个点求局部协方差时的最近邻个数,k 越大，局部面特征估计更稳定, 一般5~20
+      fast_gicp->setCorrespondenceRandomness(20);  // 每个点求局部协方差时的最近邻个数,k 越大，局部面特征估计更稳定, 一般5~20
       // fast_gicp->setCorrespondenceRandomness(10);
       // fast_gicp->setMaximumOptimizerIterations(20);//fast_gicp比普通gicp快一个数量级
       return fast_gicp;
